@@ -1,0 +1,15 @@
+const fs=require('fs');const p='apps/api/src/integration.test.ts';let s=fs.readFileSync(p,'utf8');s=s.replace('      // Verify CSRF and role checks explicitly.',`      await request('teacherPaid','profile','PATCH',{...fields,directoryVisible:true,directoryConsent:true});
+      const newProfile=await request('teacherPaid','profile');
+      await request('owner','admin/candidates/'+newProfile.id,'PATCH',{profileReviewed:true,revision:newProfile.revision});
+      await db.creditGrant.updateMany({where:{tenantId:a.id,NOT:{subscriptionId:{startsWith:'pack:'}}},data:{expiresAt:new Date(Date.now()-1000)}});
+      const packBalance=(await request('A','institution/account')).credits;
+      const packUnlocks=await Promise.all(Array.from({length:4},()=>request('A','institution/candidates/'+newProfile.id+'/unlock','POST',{},201)));
+      assert.equal(packUnlocks.reduce((n:number,r:any)=>n+r.charged,0),1);
+      assert.equal((await request('A','institution/account')).credits,packBalance-1);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:{...simple,unlockPaid:false}});
+      assert.equal((await request('B','institution/candidates/'+newProfile.id+'/unlock','POST',{},201)).charged,0);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:simple});
+      await request('C','auth/register','POST',{email:'C@example.com',password:pass,name:'New Recruiter',role:'TENANT_ADMIN',institution:'New Simple School'},201);
+      assert.equal((await request('C','institution/account')).credits,0);
+      assert.equal((await request('C','institution/account')).subscription,null);
+      // Verify CSRF and role checks explicitly.`);fs.writeFileSync(p,s);

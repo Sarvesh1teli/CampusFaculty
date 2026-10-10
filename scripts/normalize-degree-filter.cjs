@@ -1,0 +1,1 @@
+const fs=require('fs');const p='apps/api/src/main.ts';let s=fs.readFileSync(p,'utf8').replace('qualification:{equals:degree.trim().slice(0,100),mode:"insensitive" as const}','qualification:{in:[degree.trim().slice(0,100),degree.trim().replaceAll(".","").slice(0,100)],mode:"insensitive" as const}');fs.writeFileSync(p,s);

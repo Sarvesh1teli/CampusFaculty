@@ -1,0 +1,1 @@
+const fs=require('fs');const p='apps/web/src/main.tsx';let s=fs.readFileSync(p,'utf8');const start=s.indexOf('createRoot(document.getElementById');const end=s.indexOf('\n);',start)+4;fs.writeFileSync(p,s.slice(0,end)+'\n');

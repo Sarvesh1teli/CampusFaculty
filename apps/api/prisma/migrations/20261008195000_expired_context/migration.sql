@@ -1,0 +1,1 @@
+CREATE OR REPLACE FUNCTION app_private.tenant_access(t text) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT app_private.privileged() OR (current_setting('app.role',true) IN ('TENANT_ADMIN','RECRUITER') AND t = nullif(current_setting('app.tenant',true),'')) $$;

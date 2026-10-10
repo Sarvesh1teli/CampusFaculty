@@ -1,0 +1,1 @@
+const fs=require('fs');let p='apps/web/src/main.tsx',s=fs.readFileSync(p,'utf8').replace('pricing={pricing}/>','pricing={commercial}/>').replace('{page==="Jobs"&&<div','{page==="Jobs"&&modal?.type!=="job"&&<div');fs.writeFileSync(p,s);

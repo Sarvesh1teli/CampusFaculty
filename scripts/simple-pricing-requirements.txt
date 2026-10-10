@@ -1,0 +1,41 @@
+## 7. Simple fees, unlock packs and Manual UPI
+
+### Default launch pricing
+
+| Feature | Launch default | Super Admin configuration |
+| --- | --- | --- |
+| Teacher account | Free | Account registration remains free; profile activation below can be paid |
+| Teacher profile activation | Free | ₹0 for free, or any supported positive INR amount; paid activation covers subsequent profile edits |
+| Teacher job application | Free | ₹0 for free, or configurable fee per job/application attempt |
+| Institution job posting | Free | ₹0 for free, or configurable fee per published job |
+| Candidate search | Free | Existing enable/disable switch; no paid search or search quota in the simple model |
+| Contact unlock | Paid | Free/paid switch; paid mode uses a standard pack shared by all institutions |
+| Standard unlock pack | ₹200 for 5 credits | Configurable price, credit count and validity; initial validity 365 days |
+
+All monetary amounts are stored as integer paise. Administrative forms display rupees. Purchases use standard prices for every institution. Select pack quantity: one pack gives 5 credits for ₹200, two give 10 for ₹400, and so on. Super Admin may adjust a specific unpaid purchase with a fixed INR discount and recorded reason: e.g. ₹400 standard price minus ₹50 discount = ₹350 for 10 credits. This is a purchase adjustment, not a permanent institution price override. Discount must leave a positive payable amount and cannot change a submitted/approved purchase.
+
+Pricing edits apply to newly created purchase requests. Save the quoted unit price, quantity, subtotal, discount, final payable amount, credit count, validity and payee details. Catalog changes do not alter existing quotes, approved fees or credit grants. Newly registered institutions receive no subscription-based free credits in this model.
+
+### Feature fee workflow
+
+Free features do not need payment. For paid features, use Teacher Payments or Institution Account to create the required fee request, pay and submit UTR, then await Super Admin verification. Profile activation is purchased once. Posting fees are single-use posting authorizations: after approval, return to the job form to publish; payment approval alone does not publish a vacancy. Application fees are tied to a specific job and next permitted application attempt; after approval, return to the job and submit. Jobs must still be open and the reapplication waiting period must have elapsed. Consent remains separately required.
+
+If a paid application cannot be submitted because a job closes, do not consume the fee or silently create an application. Retain the unused approved request and resolve reimbursement manually with the payer. Automatic refunds/wallet transfers are not implemented at launch; administrators must not claim a refund has been sent before actual reimbursement. Avoid enabling per-application fees until this support process is in place.
+
+### Contact credit workflow
+
+Credit packs add to the institution's unexpired balance after approval. Each first authorized contact unlock consumes one credit. The same institution/candidate pair costs zero on repeat access, always subject to live candidate consent and active status. Credits are shared among that institution's recruiters, not between institutions. Each pack expires independently according to its purchased validity. Simple-model packs do not require an active subscription. Free unlock mode requires no credits, but still requires institution verification, relevant feature switch and valid consent.
+
+Legacy purchased subscription grants remain available only during their purchased active term; queued renewal credits cannot be spent early. Old plan records and their historical receipts are retained for compatibility. They are not the default customer checkout or new customer enrollment model. Super Admin's Plans screen now configures fees and packs.
+
+### Manual UPI verification
+
+1. Create a protected purchase request and display its current amount, order ID, UPI ID, payee name and provisioned QR asset.
+2. If requesting a discount, obtain the adjusted quote before paying. A stale amount must be rejected when submitting UTR so the payer can contact support for reconciliation.
+3. Payer transfers externally and submits a text UTR. No upload routes or private receipt images. Pending/submitted requests grant no credits or paid-feature authorization.
+4. Only Super Admin verifies the actual receipt, recipient and exact amount. Wrong or duplicate receipts cannot activate purchases.
+5. Atomically record approval and either allocate a pack grant/ledger entry or authorize the purchased fee. Concurrent/repeated approval must grant once. One bank receipt cannot fund multiple orders or legacy plan requests.
+6. Send an in-app result and show protected purchase history with subtotal, discount, amount and status. Rejected payments require support resolution; do not encourage another transfer before reconciliation.
+
+Use AWAITING_PAYMENT, UNDER_REVIEW, APPROVED and REJECTED purchase states; consumption is recorded separately. Discounts and administrative decisions require an audit reason. UPI settings remain Super Admin controlled, with system QR assets provisioned at deployment. No real payments are enabled until the receiving account and matching QR are configured and verified. New purchase history is not a finalized statutory tax invoice; tax-compliant receipt/PDF generation is a launch follow-up.
+

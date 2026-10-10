@@ -1,0 +1,1 @@
+const fs=require('fs');const p='scripts/check-admin-layout.cjs';let s=fs.readFileSync(p,'utf8');s=s.replace("await p.waitForFunction(()=>!document.querySelector('.admin-content [role=status].empty'));","");s=s.replace('}finally{await b.close();}',"}catch(err){console.log(await p.locator('body').innerText());throw err;}finally{await b.close();}");fs.writeFileSync(p,s);

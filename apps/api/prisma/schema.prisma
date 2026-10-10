@@ -1,0 +1,332 @@
+generator client {
+ provider = "prisma-client-js"
+}
+datasource db {
+ provider = "postgresql"
+ url = env("DATABASE_URL")
+ directUrl = env("MIGRATION_DATABASE_URL")
+}
+model User {
+ id String @id @default(cuid())
+ email String @unique
+ password String
+ role String
+ name String
+ tenantId String?
+ active Boolean @default(true)
+ emailVerified Boolean @default(false)
+ mobileVerified Boolean @default(false)
+ sessions Session[]
+ candidate Candidate?
+ createdAt DateTime @default(now())
+ @@index([tenantId, role])
+ @@index([tenantId, active])
+}
+model VerificationChallenge {
+ id String @id @default(cuid())
+ userId String
+ channel String
+ destination String
+ hash String
+ expiresAt DateTime
+ attempts Int @default(0)
+ used Boolean @default(false)
+ @@index([userId, channel, expiresAt])
+}
+model Session {
+ id String @id
+ csrf String
+ userId String
+ user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+ expiresAt DateTime
+ @@index([expiresAt])
+}
+model Tenant {
+ recruitingProfessions String[] @default(["TEACHER"])
+ id String @id @default(cuid())
+ name String
+ verified Boolean @default(false)
+ blocked Boolean @default(false)
+ createdAt DateTime @default(now())
+}
+// Search/partial indexes are maintained in 20261010183000_query_indexes SQL.
+model Candidate {
+ profession String @default("TEACHER")
+ pharmacyDetails Json @default("{}")
+ currentPlaceId String?
+ preferredPlaceIds String[] @default([])
+ @@index([profession, active, profileReviewed])
+ @@index([currentPlaceId])
+ @@index([preferredPlaceIds], type: Gin)
+ id String @id @default(cuid())
+ userId String @unique
+ user User @relation(fields: [userId], references: [id])
+ displayId String @unique
+ subject String
+ qualification String
+ experience Int @default(0)
+ location String
+ salary Int @default(0)
+ mobile String @default("")
+ personalDetails Json @default("{}")
+ active Boolean @default(true)
+ jobSeeking Boolean @default(true)
+ directoryVisible Boolean @default(true)
+ directoryConsent Boolean @default(false)
+ profileReviewed Boolean @default(false)
+ revision Int @default(1)
+ education Json @default("[]")
+ experienceEntries Json @default("[]")
+ skills Json @default("[]")
+ subjects Json @default("[]")
+ preferredLocations Json @default("[]")
+ availability String @default("Not specified")
+ noticeDays Int @default(0)
+ createdAt DateTime @default(now())
+ @@index([mobile])
+}
+model Plan {
+ id String @id @default(cuid())
+ name String
+ amount Int
+ days Int @default(30)
+ credits Int
+ jobLimit Int
+ searchLimit Int
+ active Boolean @default(true)
+ creditExpiryPolicy String @default("EXPIRE")
+ carryForwardCap Int?
+}
+model Subscription {
+ id String @id @default(cuid())
+ tenantId String
+ planId String
+ snapshot Json
+ startsAt DateTime
+ endsAt DateTime
+ searchesUsed Int @default(0)
+ paymentId String? @unique
+ @@index([tenantId, startsAt, endsAt])
+ @@index([tenantId, endsAt])
+ @@index([endsAt])
+}
+model CreditGrant {
+ id String @id @default(cuid())
+ tenantId String
+ subscriptionId String
+ remaining Int
+ amount Int
+ expiresAt DateTime
+ @@index([tenantId, expiresAt])
+ @@index([expiresAt])
+}
+model CreditTransaction {
+ id String @id @default(cuid())
+ tenantId String
+ grantId String
+ delta Int
+ type String
+ reference String @unique
+ actorId String
+ createdAt DateTime @default(now())
+ @@index([tenantId, createdAt])
+ @@index([tenantId, type])
+}
+model Unlock {
+ id String @id @default(cuid())
+ tenantId String
+ candidateId String
+ actorId String
+ createdAt DateTime @default(now())
+ @@unique([tenantId, candidateId])
+}
+model Job {
+ profession String @default("TEACHER")
+ @@index([profession, status, closesAt])
+ id String @id @default(cuid())
+ tenantId String
+ title String
+ subject String
+ location String
+ salary Int
+ description String
+ closesAt DateTime
+ status String @default("PUBLISHED")
+ createdAt DateTime @default(now())
+ @@index([tenantId, createdAt])
+ @@index([status, closesAt])
+}
+model Application {
+ id String @id @default(cuid())
+ tenantId String
+ jobId String
+ candidateId String
+ attempt Int
+ contactConsent Boolean
+ status String @default("APPLIED")
+ firstViewedAt DateTime?
+ closedAt DateTime?
+ createdAt DateTime @default(now())
+ @@unique([jobId, candidateId, attempt])
+ @@index([tenantId])
+ @@index([candidateId, createdAt])
+ @@index([tenantId, candidateId, contactConsent])
+}
+model Pipeline {
+ id String @id @default(cuid())
+ tenantId String
+ candidateId String
+ jobId String?
+ applicationId String? @unique
+ source String
+ stage String
+ @@index([tenantId])
+ @@index([tenantId, candidateId])
+ @@index([candidateId])
+}
+model StatusHistory {
+ id String @id @default(cuid())
+ applicationId String
+ status String
+ actorId String
+ createdAt DateTime @default(now())
+ @@index([applicationId, createdAt])
+}
+model Note {
+ id String @id @default(cuid())
+ tenantId String
+ pipelineId String
+ text String
+ actorId String
+ createdAt DateTime @default(now())
+ @@index([tenantId, pipelineId])
+}
+model Interview {
+ id String @id @default(cuid())
+ tenantId String
+ pipelineId String
+ scheduledAt DateTime
+ mode String
+ details String
+ createdAt DateTime @default(now())
+ @@index([tenantId, pipelineId])
+}
+model PaymentRequest {
+ id String @id @default(cuid())
+ tenantId String
+ planId String
+ snapshot Json
+ payeeSnapshot Json
+ amount Int
+ status String @default("AWAITING_PAYMENT")
+ utr String?
+ receiptKey String? @unique
+ decisionReason String?
+ verifiedBy String?
+ approvedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([tenantId, createdAt])
+ @@index([createdAt])
+}
+model Invoice {
+ id String @id @default(cuid())
+ tenantId String
+ paymentId String @unique
+ number String @unique
+ amount Int
+ createdAt DateTime @default(now())
+ @@index([tenantId])
+}
+model Setting {
+ key String @id
+ value Json
+ version Int @default(1)
+}
+model Audit {
+ id String @id @default(cuid())
+ actorId String
+ tenantId String?
+ action String
+ entityId String
+ details Json
+ createdAt DateTime @default(now())
+ @@index([createdAt])
+ @@index([action, createdAt])
+ @@index([actorId, createdAt])
+ @@index([entityId, action])
+}
+model Notification {
+ id String @id @default(cuid())
+ userId String
+ tenantId String?
+ title String
+ body String
+ read Boolean @default(false)
+ createdAt DateTime @default(now())
+ @@index([userId, createdAt])
+}
+model SearchSession {
+ id String @id @default(cuid())
+ tenantId String
+ subscriptionId String
+ fingerprint String
+ expiresAt DateTime
+ @@unique([tenantId, subscriptionId, fingerprint])
+}
+model CommerceOrder {
+ id String @id @default(cuid())
+ userId String
+ tenantId String?
+ candidateId String?
+ kind String
+ target String @default("")
+ snapshot Json
+ subtotal Int
+ discount Int @default(0)
+ amount Int
+ payeeSnapshot Json
+ status String @default("AWAITING_PAYMENT")
+ utr String?
+ receiptKey String? @unique
+ reason String?
+ approvedAt DateTime?
+ consumedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([tenantId, candidateId])
+ @@index([tenantId, createdAt])
+ @@index([userId, createdAt])
+ @@index([createdAt])
+ @@index([userId, kind, target, status])
+ @@index([tenantId, kind, target, status])
+ @@index([status])
+}
+
+model UnavailableReport {
+ id String @id @default(cuid())
+ tenantId String
+ candidateId String
+ unlockId String @unique
+ reportedBy String
+ reason String
+ status String @default("PENDING")
+ restoreCredit Boolean @default(false)
+ markUnavailable Boolean @default(false)
+ decisionReason String?
+ reviewedBy String?
+ reviewedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([status, createdAt])
+ @@index([tenantId, createdAt])
+}
+
+model GeoPlace {
+ id String @id
+ name String
+ district String
+ state String
+ aliases String
+ latitude Float
+ longitude Float
+ source String @default("GeoNames")
+ @@index([latitude, longitude])
+}

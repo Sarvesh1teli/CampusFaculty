@@ -1,0 +1,1393 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "CampusFaculty API",
+    "version": "0.1.0",
+    "description": "Cookie sessions. State-changing authenticated calls require x-csrf-token and matching Origin. Amounts are integer paise. See REQUIREMENTS.md for domain policies."
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "health",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "summary": "auth register",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "summary": "auth login",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "summary": "auth me",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "summary": "auth logout",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/profile": {
+      "get": {
+        "summary": "profile",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "profile",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "summary": "jobs",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/institution/jobs": {
+      "get": {
+        "summary": "institution jobs",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "institution jobs",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/jobs/{id}/close": {
+      "patch": {
+        "summary": "institution jobs :id close",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{id}/apply": {
+      "post": {
+        "summary": "jobs :id apply",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/applications": {
+      "get": {
+        "summary": "applications",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/applications/{id}": {
+      "patch": {
+        "summary": "applications :id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/candidates": {
+      "get": {
+        "summary": "institution candidates",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/institution/candidates/{id}/contact": {
+      "get": {
+        "summary": "institution candidates :id contact",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/institution/candidates/{id}/unlock": {
+      "post": {
+        "summary": "institution candidates :id unlock",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/hiring": {
+      "get": {
+        "summary": "institution hiring",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "institution hiring",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/hiring/{id}": {
+      "patch": {
+        "summary": "institution hiring :id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/hiring/{id}/interviews": {
+      "post": {
+        "summary": "institution hiring :id interviews",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans": {
+      "get": {
+        "summary": "plans",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/institution/account": {
+      "get": {
+        "summary": "institution account",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/institution/payments": {
+      "post": {
+        "summary": "institution payments",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/payments/{id}/submit": {
+      "post": {
+        "summary": "institution payments :id submit",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/overview": {
+      "get": {
+        "summary": "admin overview",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/admin/tenants/{id}": {
+      "patch": {
+        "summary": "admin tenants :id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/settings/{key}": {
+      "patch": {
+        "summary": "admin settings :key",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/plans/{id}": {
+      "patch": {
+        "summary": "admin plans :id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/payments/{id}/decision": {
+      "post": {
+        "summary": "admin payments :id decision",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/profile": {
+      "get": {
+        "summary": "institution profile",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "institution profile",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/plans": {
+      "post": {
+        "summary": "admin plans",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/team": {
+      "get": {
+        "summary": "institution team",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "institution team",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/team/{id}": {
+      "patch": {
+        "summary": "institution team :id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/candidates": {
+      "get": {
+        "summary": "admin candidates",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/admin/candidates/{id}": {
+      "patch": {
+        "summary": "admin candidates :id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/invoices/{id}/pdf": {
+      "get": {
+        "summary": "institution invoices :id pdf",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/auth/verification/start": {
+      "post": {
+        "summary": "auth verification start",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/verification/confirm": {
+      "post": {
+        "summary": "auth verification confirm",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "summary": "notifications",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/notifications/{id}/read": {
+      "patch": {
+        "summary": "notifications :id read",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/institution/reports": {
+      "get": {
+        "summary": "institution reports",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation/domain error"
+          },
+          "403": {
+            "description": "Role, tenant, consent or feature restriction"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/commerce/config": {
+      "get": {
+        "summary": "Protected simple commerce get",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    },
+    "/api/commerce/orders": {
+      "get": {
+        "summary": "Protected simple commerce get",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      },
+      "post": {
+        "summary": "Protected simple commerce post",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    },
+    "/api/commerce/orders/{id}/submit": {
+      "post": {
+        "summary": "Protected simple commerce post",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    },
+    "/api/admin/commerce/{id}/discount": {
+      "patch": {
+        "summary": "Protected simple commerce patch",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    },
+    "/api/admin/commerce/{id}/decision": {
+      "post": {
+        "summary": "Protected simple commerce post",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    },
+    "/api/admin/commerce/{id}/refund": {
+      "post": {
+        "summary": "Protected simple commerce post",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "cf_session"
+      }
+    }
+  }
+}

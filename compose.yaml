@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: campusfaculty
+      POSTGRES_USER: campusfaculty_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U campusfaculty_owner"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  migrate:
+    profiles: ["tools"]
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    command:
+      ["node", "../../node_modules/prisma/build/index.js", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set migration owner URL}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set migration owner URL}
+    depends_on: { db: { condition: service_healthy } }
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    restart: unless-stopped
+    environment: &api-env
+      DATABASE_URL: ${DATABASE_URL:?Set non-superuser runtime URL}
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      PORT: 3001
+      WEB_ORIGIN: ${WEB_ORIGIN:-https://faculty.telicampus.in}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on: { db: { condition: service_healthy } }
+  worker:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    environment: *api-env
+    depends_on: { db: { condition: service_healthy } }
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_PUBLIC_URL: ${VITE_PUBLIC_URL:-https://faculty.telicampus.in}
+    restart: unless-stopped
+    ports: ["127.0.0.1:8080:80"]
+    depends_on: [api]
+volumes:
+  postgres-data:

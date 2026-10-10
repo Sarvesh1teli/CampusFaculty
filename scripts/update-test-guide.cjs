@@ -1,0 +1,5 @@
+const fs=require('fs');const p='OPTION2_TEST_GUIDE.md';let s=fs.readFileSync(p,'utf8');const a=s.indexOf('## 1.'),b=s.indexOf('## 2.');s=s.slice(0,a)+`## 1. Leave both workflows enabled
+
+You can test Option 2 while Option 1 remains enabled. All five controls are enabled. Do not post a job or apply to a job during this test. Super Admin Settings should have Search candidates and Unlock contact details On. No switch changes are required.
+
+`+s.slice(b);s=s.replace('Home should lead to Update profile; job navigation should be absent. Open Profile.','Open Profile; use the Basics, Background, Preferences and Privacy tabs.');s=s.replace('Enable Active profile, Directory visibility and Directory contact consent. Save.','In the Privacy tab, enable My profile is active, Show my anonymous profile in institution searches, and Allow verified institutions to unlock my contact details from search. Click Save profile.');s=s.replace('Profile → turn off directory contact consent','Profile → Privacy → turn off directory contact consent');fs.writeFileSync(p,s);

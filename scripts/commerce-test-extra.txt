@@ -1,0 +1,48 @@
+      // New simple commerce runs in the same isolated test schema.
+      const simple={enabled:true,profileFee:0,applicationFee:0,jobFee:0,unlockPaid:true,packPrice:20000,packCredits:5,validityDays:365};
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:simple});
+      const beforePack=(await request('A','institution/account')).credits;
+      const pack=await request('A','commerce/orders','POST',{kind:'UNLOCK_PACK',quantity:2},201);
+      assert.equal(pack.amount,40000);assert.equal(pack.snapshot.credits,10);
+      await request('B','commerce/orders/'+pack.id+'/submit','POST',{utr:'FAKE-OTHER',amount:40000},404);
+      assert.equal((await request('B','commerce/orders')).some((o:any)=>o.id===pack.id),false);
+      await request('A','admin/commerce/'+pack.id+'/discount','PATCH',{discount:5000,reason:'Test discount'},403);
+      await request('owner','admin/commerce/'+pack.id+'/discount','PATCH',{discount:5000,reason:'Test discount'});
+      await request('A','commerce/orders/'+pack.id+'/submit','POST',{utr:'FAKE-PACK-1',amount:40000},400);
+      await request('A','commerce/orders/'+pack.id+'/submit','POST',{utr:'FAKE-PACK-1',amount:35000},201);
+      assert.equal((await request('A','institution/account')).credits,beforePack);
+      await request('owner','admin/commerce/'+pack.id+'/discount','PATCH',{discount:4000,reason:'Too late discount'},400);
+      await request('owner','admin/commerce/'+pack.id+'/decision','POST',{approve:true,receivedAmount:40000,receiptReference:'FAKE-PACK-1',reason:'Incorrect amount'},400);
+      await Promise.all(Array.from({length:4},()=>request('owner','admin/commerce/'+pack.id+'/decision','POST',{approve:true,receivedAmount:35000,receiptReference:'FAKE-PACK-1',reason:'Isolated test receipt'},201)));
+      assert.equal((await request('A','institution/account')).credits,beforePack+10);
+      assert.equal(await db.creditTransaction.count({where:{reference:pack.id}}),1);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:{...simple,packPrice:30000,packCredits:4}});
+      const saved=(await request('A','commerce/orders')).find((o:any)=>o.id===pack.id);
+      assert.equal(saved.amount,35000);assert.equal(saved.snapshot.credits,10);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:{...simple,profileFee:1000,jobFee:2000,applicationFee:500}});
+      await request('teacher','profile','PATCH',fields,403);
+      async function purchase(who:string,kind:string,target=''){const o=await request(who,'commerce/orders','POST',{kind,target},201);await request(who,'commerce/orders/'+o.id+'/submit','POST',{utr:'FAKE-'+o.id,amount:o.amount},201);await request('owner','admin/commerce/'+o.id+'/decision','POST',{approve:true,receivedAmount:o.amount,receiptReference:'FAKE-'+o.id,reason:'Isolated test only'},201);return o;}
+      await purchase('teacher','PROFILE');
+      await request('teacher','profile','PATCH',fields);
+      await request('teacher','profile','PATCH',fields); // activation is not charged per edit
+      const paidJobFields={title:'Paid posting test',subject:'Math',location:'Delhi',salary:40000,description:'A paid posting entitlement test description.',closesAt:new Date(Date.now()+86400000).toISOString()};
+      await request('A','institution/jobs','POST',paidJobFields,403);
+      await purchase('A','JOB');
+      const paidJob=await request('A','institution/jobs','POST',paidJobFields,201);
+      await request('A','institution/jobs','POST',paidJobFields,403); // exactly one posting
+      await request('teacher','jobs/'+paidJob.id+'/apply','POST',{contactConsent:true},403);
+      const appFee=await purchase('teacher','APPLICATION',paidJob.id);
+      await request('teacher','jobs/'+paidJob.id+'/apply','POST',{contactConsent:true},201);
+      await request('teacher','jobs/'+paidJob.id+'/apply','POST',{contactConsent:true},201); // idempotent
+      assert.ok((await db.commerceOrder.findUniqueOrThrow({where:{id:appFee.id}})).consumedAt);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:simple});
+      await request('A','institution/jobs','POST',paidJobFields,201); // default free has no subscription quota
+      assert.ok((await request('A','institution/candidates?q=Math')).items);
+      // Closed paid application keeps its approved fee available for manual refund resolution.
+      const closedJob=await request('A','institution/jobs','POST',paidJobFields,201);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:{...simple,applicationFee:500}});
+      const closedFee=await purchase('teacher','APPLICATION',closedJob.id);
+      await request('A','institution/jobs/'+closedJob.id+'/close','PATCH',{});
+      await request('teacher','jobs/'+closedJob.id+'/apply','POST',{contactConsent:true},400);
+      assert.equal((await db.commerceOrder.findUniqueOrThrow({where:{id:closedFee.id}})).consumedAt,null);
+      await request('owner','admin/settings/simple_pricing','PATCH',{value:simple});

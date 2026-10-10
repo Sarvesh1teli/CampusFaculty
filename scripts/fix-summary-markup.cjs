@@ -1,0 +1,1 @@
+const fs=require('fs');const p='apps/web/src/main.tsx';let s=fs.readFileSync(p,'utf8');s=s.replace('\n["Candidates", data.candidateCount],','\n  if (page === "Overview") return (<> <section className="admin-summary">{[["Institutions",data.tenants.length],["Candidates", data.candidateCount],');fs.writeFileSync(p,s);

@@ -1,0 +1,11 @@
+ALTER TABLE "Tenant" ADD COLUMN "recruitingProfessions" TEXT[] NOT NULL DEFAULT ARRAY['TEACHER'];
+ALTER TABLE "Candidate" ADD COLUMN "profession" TEXT NOT NULL DEFAULT 'TEACHER', ADD COLUMN "pharmacyDetails" JSONB NOT NULL DEFAULT '{}', ADD COLUMN "currentPlaceId" TEXT, ADD COLUMN "preferredPlaceIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "Job" ADD COLUMN "profession" TEXT NOT NULL DEFAULT 'TEACHER';
+CREATE INDEX "Candidate_profession_active_profileReviewed_idx" ON "Candidate"("profession",active,"profileReviewed");
+CREATE INDEX "Candidate_currentPlaceId_idx" ON "Candidate"("currentPlaceId");
+CREATE INDEX "Candidate_preferredPlaceIds_idx" ON "Candidate" USING gin("preferredPlaceIds");
+CREATE INDEX "Job_profession_status_closesAt_idx" ON "Job"("profession",status,"closesAt");
+CREATE TABLE "GeoPlace" (id TEXT PRIMARY KEY,name TEXT NOT NULL,district TEXT NOT NULL,state TEXT NOT NULL,aliases TEXT NOT NULL,latitude DOUBLE PRECISION NOT NULL,longitude DOUBLE PRECISION NOT NULL,source TEXT NOT NULL DEFAULT 'GeoNames');
+CREATE INDEX "GeoPlace_latitude_longitude_idx" ON "GeoPlace"(latitude,longitude);
+CREATE INDEX "GeoPlace_name_trgm_idx" ON "GeoPlace" USING gin(name gin_trgm_ops);
+CREATE INDEX "GeoPlace_aliases_trgm_idx" ON "GeoPlace" USING gin(aliases gin_trgm_ops);

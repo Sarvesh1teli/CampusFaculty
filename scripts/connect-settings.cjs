@@ -1,0 +1,1 @@
+const fs=require('fs');let p='apps/web/src/main.tsx',s=fs.readFileSync(p,'utf8').replace('import { WorkflowSettings }','import { WorkflowSettings, configureSettingsRequest }');s=s.replace('const rupees =','configureSettingsRequest((key,value)=>api("admin/settings/"+key,"PATCH",{value}));\nconst rupees =');fs.writeFileSync(p,s);

@@ -14,7 +14,7 @@ async function main() {
     update: {},
     create: {
       email: process.env.SEED_ADMIN_EMAIL || "owner@campusfaculty.local",
-      name: "CampusFaculty Owner",
+      name: "TeliCareers Owner",
       role: "SUPER_ADMIN",
       password: salt + ":" + scryptSync(password, salt, 64).toString("hex"),
     },

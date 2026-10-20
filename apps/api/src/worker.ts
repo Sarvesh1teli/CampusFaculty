@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { db, base, scope } from "./database";
 async function tick() {
   const now = new Date();
+  await db.passwordResetChallenge.deleteMany({where:{expiresAt:{lt:new Date(Date.now()-7*86400000)}}});
   await db.session.deleteMany({ where: { expiresAt: { lt: now } } });
   const grants = await db.creditGrant.findMany({
     where: { expiresAt: { lte: now }, remaining: { gt: 0 } },

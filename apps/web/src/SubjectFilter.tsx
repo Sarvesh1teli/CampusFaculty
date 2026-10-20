@@ -1,0 +1,3 @@
+export const subjectChoices=["English","Kannada","Hindi","Marathi","Urdu","Sanskrit","Mathematics","Science","Physics","Chemistry","Biology","Social Science","History","Geography","Commerce","Accounts","Economics","Computer Science","CS","Sales","Electrical"];
+export function SubjectFilter({value,onChange,extra=[]}:any){const options=Array.from(new Set<string>([...subjectChoices,...extra.filter(Boolean),...(value?[value]:[])])).sort((a,b)=>a.localeCompare(b));return <select aria-label="Subject filter" value={value} onChange={e=>onChange(e.target.value)}><option value="">All subjects</option>{options.map(v=><option key={v}>{v}</option>)}</select>}
+export const degreeChoices=(v:string[]=[])=>v.filter(x=>!["deled","beled"].includes(x.toLowerCase().replace(/[^a-z]/g,"")));

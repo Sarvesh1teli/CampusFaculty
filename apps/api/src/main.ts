@@ -1,4 +1,6 @@
-import { pricing, defaultPricing, requireFee, createOrder } from "./commerce";
+import {generalConfig,defaultGeneral,generalConfigSchema,eligibility,requirementsSchema,normalizeDegree} from "./general";
+import {recoveryEnabled,requestRecovery,completeRecovery} from "./password-recovery";
+import { pricing,creditPricing, defaultPricing, requireFee, createOrder } from "./commerce";
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
@@ -86,6 +88,10 @@ async function tx<T>(
       await new Promise((r) => setTimeout(r, 10 + Math.random() * 30));
     }
   }
+}
+async function approveSavedProfiles(t:any,profession:string){
+ const activated=await t.setting.findMany({where:{key:{startsWith:"profile-activation:"},value:{equals:true}}});
+ return t.candidate.updateMany({where:{profession,userId:{in:activated.map((v:any)=>v.key.slice("profile-activation:".length))},profileReviewed:false,active:true,user:{active:true}},data:{profileReviewed:true}});
 }
 async function lock(t: Prisma.TransactionClient, key: string) {
   await t.$queryRawUnsafe(
@@ -222,13 +228,18 @@ class Api {
       });
     });
   }
+  @Get("public/general-config") async publicGeneral(){return generalConfig(db);}
+  @Patch("admin/general-config") async saveGeneral(@Req() req:any,@Body() body:any){const u=(await actor(req,["SUPER_ADMIN"])).user;const b=generalConfigSchema.parse(body);return tx(async t=>{await lock(t,"general-config");const old=await generalConfig(t);if(old.categories.some((c:any)=>!b.categories.some(x=>x.id===c.id)))throw new BadRequestException("Deactivate existing categories instead of deleting their IDs");await t.setting.upsert({where:{key:"general_jobs"},create:{key:"general_jobs",value:b},update:{value:b}});if(!b.approvalRequired){const result=await approveSavedProfiles(t,"GENERAL");await audit(t,u,"PENDING_PROFILES_AUTO_APPROVED","general_jobs",{profession:"GENERAL",count:result.count});}await audit(t,u,"GENERAL_CONFIG_UPDATED","general_jobs");return b;});}
   @Get("commerce/config") async commerceConfig(@Req() req: any) {
     await actor(req);
-    const cfg = (await pricing(db)) || defaultPricing;
     const a = await actor(req);
+    const own= a.user.role==="CANDIDATE"?await db.candidate.findUnique({where:{userId:a.user.id}}):null;
+    const cfg = own?.profession==="GENERAL"?{...(await generalConfig(db)),enabled:true}:(await pricing(db)) || defaultPricing;
     return {
       ...cfg,
-      creditValidity: a.user.tenantId ? await db.creditGrant.findMany({where:{tenantId:a.user.tenantId,remaining:{gt:0},expiresAt:{gt:new Date()}},select:{expiresAt:true,remaining:true},orderBy:{expiresAt:"asc"}}) : [],
+      professionPricing:{GENERAL:{...(await generalConfig(db)),enabled:true},TEACHER:cfg,PHARMACIST:await creditPricing(db,"PHARMACIST"),NURSE:await creditPricing(db,"NURSE")},
+      recruitingProfessions:a.user.tenantId?(await db.tenant.findUnique({where:{id:a.user.tenantId}}))?.recruitingProfessions:[],
+      creditValidity: a.user.tenantId ? await db.creditGrant.findMany({where:{tenantId:a.user.tenantId,remaining:{gt:0},expiresAt:{gt:new Date()}},select:{expiresAt:true,remaining:true,profession:true},orderBy:{expiresAt:"asc"}}) : [],
       profileActivated:
         (
           await db.setting.findUnique({
@@ -250,6 +261,35 @@ class Api {
     const [tenants,users]=await Promise.all([db.tenant.findMany({where:{id:{in:orders.map(o=>o.tenantId).filter((id):id is string=>!!id)}},select:{id:true,name:true}}),db.user.findMany({where:{id:{in:orders.map(o=>o.userId)}},select:{id:true,name:true}})]);
     return orders.map(o=>({...o,customerName:tenants.find(t=>t.id===o.tenantId)?.name || users.find(u=>u.id===o.userId)?.name || o.tenantId || o.userId}));
   }
+  @Post("admin/cash-credits") async cashCredits(@Req() req:any,@Body() body:any){
+    const owner=(await actor(req,["SUPER_ADMIN"])).user;
+    const b=z.object({tenantId:z.string().min(1).max(100),profession:z.enum(["GENERAL","TEACHER","PHARMACIST","NURSE"]),mode:z.enum(["CASH","COMPLIMENTARY"]),quantity:z.number().int().min(1).max(100),receiptReference:z.string().trim().min(3).max(80).regex(/^[A-Za-z0-9/_-]+$/),paymentDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),note:z.string().trim().max(500).default(""),expectedPackPrice:z.number().int().min(0),expectedPackCredits:z.number().int().positive(),expectedValidityDays:z.number().int().positive()}).strict().parse(body);
+    const paidOn=new Date(b.paymentDate+"T00:00:00Z");const today=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Kolkata"});
+    if(!Number.isFinite(paidOn.getTime())||paidOn.toISOString().slice(0,10)!==b.paymentDate||b.paymentDate>today)throw new BadRequestException("Choose a valid payment date, not in the future");
+    if(b.mode==="COMPLIMENTARY"&&b.note.length<5)throw new BadRequestException("Explain why complimentary credits are being added");
+    return tx(async t=>{
+      await lock(t,"tenant:"+b.tenantId);
+      const tenant=await t.tenant.findUnique({where:{id:b.tenantId}});
+      if(!tenant||tenant.blocked)throw new BadRequestException("Choose an active employer");
+      if(!tenant.recruitingProfessions.includes(b.profession))throw new BadRequestException("Employer does not recruit this profession");
+      const cfg=await creditPricing(t,b.profession);
+      if(!cfg?.enabled||!cfg.unlockPaid)throw new BadRequestException("Paid credit packs are not enabled for this profession");
+      if(cfg.packPrice!==b.expectedPackPrice||cfg.packCredits!==b.expectedPackCredits||cfg.validityDays!==b.expectedValidityDays)throw new BadRequestException("Credit plan changed. Refresh and confirm the new plan");
+      const receiptKey="CASH:"+b.receiptReference.toUpperCase();await lock(t,"receipt:"+receiptKey);
+      if(await t.commerceOrder.findUnique({where:{receiptKey}})||await t.paymentRequest.findUnique({where:{receiptKey}}))throw new BadRequestException("Receipt / adjustment reference already recorded");
+      const employer=await t.user.findFirst({where:{tenantId:b.tenantId,role:"TENANT_ADMIN"},orderBy:{createdAt:"asc"}});
+      if(!employer)throw new BadRequestException("Employer account not found");
+      const credits=cfg.packCredits*b.quantity,amount=b.mode==="CASH"?cfg.packPrice*b.quantity:0,now=new Date(),expiresAt=new Date(now.getTime()+cfg.validityDays*86400000);
+      const snapshot={kind:"UNLOCK_PACK",profession:b.profession,quantity:b.quantity,credits,validityDays:cfg.validityDays,unitPrice:cfg.packPrice,name:(b.mode==="CASH"?"Cash credit pack":"Complimentary credits"),paymentMethod:b.mode,paymentDate:b.paymentDate,receiptReference:b.receiptReference,recordedBy:owner.id,note:b.note};
+      const order=await t.commerceOrder.create({data:{userId:employer.id,tenantId:tenant.id,kind:"UNLOCK_PACK",snapshot,subtotal:amount,amount,payeeSnapshot:{method:b.mode},status:"APPROVED",utr:b.receiptReference.toUpperCase(),receiptKey,reason:b.note||"Cash received by Owner",approvedAt:now}});
+      const grant=await t.creditGrant.create({data:{tenantId:tenant.id,profession:b.profession,subscriptionId:"pack:"+order.id,amount:credits,remaining:credits,expiresAt}});
+      await t.creditTransaction.create({data:{tenantId:tenant.id,grantId:grant.id,profession:b.profession,delta:credits,type:b.mode==="CASH"?"CASH_ALLOCATION":"COMPLIMENTARY_ALLOCATION",reference:order.id,actorId:owner.id}});
+      const invoice=b.mode==="CASH"?await t.invoice.create({data:{tenantId:tenant.id,paymentId:order.id,number:"TC-CASH-"+order.id,amount}}):null;
+      await audit(t,{...owner,tenantId:tenant.id},b.mode==="CASH"?"CASH_PAYMENT_CREDITS_ADDED":"COMPLIMENTARY_CREDITS_ADDED",order.id,{employer:tenant.name,profession:b.profession,credits,amount,paymentDate:b.paymentDate,receiptReference:b.receiptReference,expiresAt:expiresAt.toISOString(),note:b.note});
+      await t.notification.create({data:{userId:employer.id,tenantId:tenant.id,title:b.mode==="CASH"?"Cash payment recorded":"Complimentary credits added",body:credits+" "+b.profession+" credits added. Valid "+cfg.validityDays+" days."}});
+      return {order,invoice,credits,expiresAt};
+    });
+  }
   @Post("commerce/orders") async commerceCreate(
     @Req() req: any,
     @Body() body: any,
@@ -257,6 +297,7 @@ class Api {
     const s = await actor(req, ["CANDIDATE", "TENANT_ADMIN", "RECRUITER"]);
     const b = z
       .object({
+        profession:z.enum(["TEACHER","PHARMACIST","NURSE","GENERAL"]).default("TEACHER"),
         kind: z.enum(["PROFILE", "APPLICATION", "JOB", "UNLOCK_PACK"]),
         quantity: z.number().int().min(1).max(100).default(1),
         target: z.string().max(200).default(""),
@@ -264,7 +305,7 @@ class Api {
       .parse(body);
     if (b.kind !== "UNLOCK_PACK" && b.quantity !== 1)
       throw new BadRequestException("Feature fees are purchased one at a time");
-    return tx((t) => createOrder(t, s.user, b.kind, b.quantity, b.target));
+    return tx((t) => createOrder(t, s.user, b.kind, b.quantity, b.target,b.profession));
   }
   @Post("commerce/orders/:id/submit") async commerceSubmit(
     @Req() req: any,
@@ -381,6 +422,7 @@ class Api {
           data: {
             tenantId: o.tenantId!,
             subscriptionId: "pack:" + o.id,
+            profession:terms.profession||"TEACHER",
             amount: terms.credits,
             remaining: terms.credits,
             expiresAt: new Date(Date.now() + terms.validityDays * 86400000),
@@ -390,6 +432,7 @@ class Api {
           data: {
             tenantId: o.tenantId!,
             grantId: g.id,
+            profession:g.profession,
             delta: terms.credits,
             type: "PACK_ALLOCATION",
             reference: o.id,
@@ -397,6 +440,7 @@ class Api {
           },
         });
       }
+      if(o.kind==="UNLOCK_PACK"&&terms.profession&&terms.profession!=="TEACHER")await t.invoice.create({data:{tenantId:o.tenantId!,paymentId:o.id,number:"CF-PACK-"+o.id,amount:o.amount}});
       await audit(t, s.user, "PURCHASE_APPROVED", id, {
         amount: o.amount,
         receiptKey,
@@ -447,7 +491,7 @@ class Api {
 
   @Get("health") async health() {
     await db.$queryRawUnsafe("SELECT 1");
-    return { status: "ok", name: "CampusFaculty" };
+    return { status: "ok", name: "TeliCareers" };
   }
   @Post("auth/register") async register(@Body() body: any, @Req() req: any) {
     const b = z
@@ -460,8 +504,9 @@ class Api {
         name: z.string().min(2).max(100),
         campaign:z.string().trim().max(40).optional(),
         registrationMobile:z.string().regex(/^[0-9]{10}$/).optional(),
-        profession:z.enum(["TEACHER","PHARMACIST"]).default("TEACHER"),
-        recruitingProfessions:z.array(z.enum(["TEACHER","PHARMACIST"])).min(1).max(2).optional(),
+        profession:z.enum(["TEACHER","PHARMACIST","NURSE","GENERAL"]).default("TEACHER"),
+        generalCategories:z.array(z.string().max(40)).max(50).optional(),
+        recruitingProfessions:z.array(z.enum(["TEACHER","PHARMACIST","NURSE","GENERAL"])).min(1).max(4).optional(),
         role: z.enum(["CANDIDATE", "TENANT_ADMIN"]),
         institution: z.preprocess(
           (v) => (v === "" ? undefined : v),
@@ -473,11 +518,11 @@ class Api {
       throw new BadRequestException("Institution name required");
     await scope.run({ role: "SYSTEM" }, () =>
       tx(async (t) => {
-        if(b.campaign){if(b.role!=="CANDIDATE")throw new BadRequestException("Candidate campaign only");await lock(t,"campaign:"+b.campaign.toUpperCase());const c=(await t.setting.findUnique({where:{key:"campaign:"+b.campaign.toUpperCase()}}))?.value as any;if(!c?.active)throw new BadRequestException("Campaign unavailable");}if(await t.user.findUnique({where:{email:b.email}}))throw new BadRequestException("An account already exists. Sign in to continue.");
+        if(b.campaign){if(b.role!=="CANDIDATE")throw new BadRequestException("Candidate campaign only");await lock(t,"campaign:"+b.campaign.toUpperCase());const c=(await t.setting.findUnique({where:{key:"campaign:"+b.campaign.toUpperCase()}}))?.value as any;if(!c?.active)throw new BadRequestException("Campaign unavailable");}if((b.profession==="GENERAL"&&b.role==="CANDIDATE")||b.recruitingProfessions?.includes("GENERAL")){const cfg=await generalConfig(t);if(!cfg.enabled)throw new ForbiddenException("General registration is unavailable");if(b.recruitingProfessions?.includes("GENERAL")&&!b.generalCategories?.length)throw new BadRequestException("Choose at least one recruiting work category");if(b.generalCategories?.some(id=>!cfg.categories.some((c:any)=>c.id===id&&c.active)))throw new BadRequestException("Choose valid work categories");}if(await t.user.findUnique({where:{email:b.email}}))throw new BadRequestException("An account already exists. Sign in to continue.");
         if(b.registrationMobile&&await t.candidate.findFirst({where:{mobile:b.registrationMobile}}))throw new BadRequestException("Mobile already registered. Sign in to the existing account.");
         const tenant =
           b.role === "TENANT_ADMIN"
-            ? await t.tenant.create({ data: { name: b.institution!,recruitingProfessions:b.recruitingProfessions||["TEACHER"] } })
+            ? await t.tenant.create({ data: { name: b.institution!,recruitingProfessions:b.recruitingProfessions||["TEACHER"],generalCategories:b.generalCategories||[] } })
             : null;
         const u = await t.user.create({
           data: {
@@ -493,7 +538,7 @@ class Api {
             data: {
               userId: u.id,
               profession:b.profession,
-              displayId: (b.profession==="PHARMACIST"?"PH":"TC") + randomBytes(5).toString("hex").toUpperCase(),
+              displayId: (b.profession==="GENERAL"?"GN":b.profession==="NURSE"?"NU":b.profession==="PHARMACIST"?"PH":"TC") + randomBytes(5).toString("hex").toUpperCase(),
               subject: "Not specified",
               qualification: "Not specified",
               location: "Not specified",
@@ -549,6 +594,9 @@ class Api {
   @Get("admin/campaigns") async campaigns(@Req() req:any){await actor(req,["SUPER_ADMIN"]);const rows=await db.setting.findMany({where:{key:{startsWith:"campaign:"}}});const sources=await db.setting.findMany({where:{key:{startsWith:"campaign-source:"}}});return Promise.all(rows.map(async row=>{const c=row.value as any;const ids=sources.filter(v=>(v.value as any).code===c.code).map(v=>(v.value as any).userId);const candidates=await db.candidate.findMany({where:{userId:{in:ids}},select:{id:true,userId:true}});const activated=await db.setting.count({where:{key:{in:ids.map(id=>"profile-activation:"+id)},value:{equals:true}}});const pipelines=await db.pipeline.findMany({where:{candidateId:{in:candidates.map(v=>v.id)}}});return {...c,accounts:ids.length,registered:activated,shortlisted:new Set(pipelines.filter(v=>["SHORTLISTED","INTERVIEW","SELECTED","JOINED"].includes(v.stage)).map(v=>v.candidateId)).size,selected:new Set(pipelines.filter(v=>["SELECTED","JOINED"].includes(v.stage)).map(v=>v.candidateId)).size};}));}
   @Post("admin/campaigns") async createCampaign(@Req() req:any,@Body() body:any){const u=(await actor(req,["SUPER_ADMIN"])).user;const b=z.object({name:z.string().trim().min(3).max(120),code:z.string().trim().min(3).max(40).regex(/^[A-Za-z0-9-]+$/)}).parse(body);return tx(async t=>{const code=b.code.toUpperCase();await lock(t,"campaign:"+code);if(await t.setting.findUnique({where:{key:"campaign:"+code}}))throw new BadRequestException("Campaign code already exists");const value={...b,code,active:true,createdAt:new Date().toISOString()};await t.setting.create({data:{key:"campaign:"+code,value}});await audit(t,u,"CAMPAIGN_CREATED",code);return value;});}
   @Patch("admin/campaigns/:code") async changeCampaign(@Req() req:any,@Param("code") code:string,@Body() body:any){const u=(await actor(req,["SUPER_ADMIN"])).user;const b=z.object({active:z.boolean()}).parse(body);return tx(async t=>{await lock(t,"campaign:"+code);const row=await t.setting.findUniqueOrThrow({where:{key:"campaign:"+code}});const value={...(row.value as any),active:b.active};await t.setting.update({where:{key:row.key},data:{value}});await audit(t,u,"CAMPAIGN_STATUS_CHANGED",code,b);return value;});}
+  @Get("auth/password-reset/config") passwordResetConfig(){return {enabled:recoveryEnabled()};}
+  @Post("auth/password-reset/request") async passwordResetRequest(@Req() req:any,@Body() body:any){return requestRecovery(body,req.ip||"unknown");}
+  @Post("auth/password-reset/confirm") async passwordResetConfirm(@Req() req:any,@Body() body:any){const result=await completeRecovery(body);req.res.clearCookie("cf_session",{path:"/"});return result;}
   @Post("auth/login") async login(@Body() body: any, @Req() req: any) {
     const b = z
       .object({ email: z.string().email(), password: z.string().max(128) })
@@ -616,8 +664,11 @@ class Api {
         experience: z.number().int().min(0).max(60),
         salary: z.number().int().min(0).max(10000000),
         mobile: z.string().max(20),
-        personalDetails:z.object({experienceMonths:z.number().int().min(0).max(11).optional(),firstName:z.string().trim().min(1).max(60),middleName:z.string().trim().max(60).optional(),lastName:z.string().trim().max(60),address:z.string().trim().max(300).optional(),dateOfBirth:z.union([z.literal(""),z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>!Number.isNaN(Date.parse(v))&&v<=new Date().toISOString().slice(0,10),"Enter a valid past date")]).optional(),gender:z.enum(["","Male","Female","Other","Prefer not to say"]).optional(),employmentStatus:z.enum(["","Fresher","Previously worked","Currently working"]).optional(),teachingMedium:z.string().trim().max(100).optional(),otherTeachingMedium:z.string().trim().max(100).optional(),                aadhaar:z.union([z.literal(""),z.string().regex(/^[0-9]{12}$/, "Enter a 12-digit Aadhaar number")]).optional()}).optional(),
-        pharmacyDetails:z.preprocess(v=>v&&typeof v==="object"&&!Object.keys(v as object).length?undefined:v,z.object({registered:z.enum(["Yes","No","Pending"]),council:z.string().trim().max(150),registrationNumber:z.string().trim().max(100),workType:z.enum(["Full-time","Part-time","Both"]),expectedPay:z.number().int().min(0).max(10000000).nullable().optional()}).optional()),
+        personalDetails:z.object({experienceMonths:z.number().int().min(0).max(11).optional(),firstName:z.string().trim().min(1).max(60),middleName:z.string().trim().max(60).optional(),lastName:z.string().trim().max(60),address:z.string().trim().max(300).optional(),dateOfBirth:z.union([z.literal(""),z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>!Number.isNaN(Date.parse(v))&&v<=new Date().toISOString().slice(0,10),"Enter a valid past date")]).optional(),gender:z.enum(["","Male","Female","Other","Prefer not to say"]).optional(),employmentStatus:z.enum(["","Fresher","Previously worked","Currently working"]).optional(),currentJobRole:z.union([z.literal(""),publicText]).optional(),teachingMedium:z.string().trim().max(100).optional(),otherTeachingMedium:z.string().trim().max(100).optional(),                aadhaar:z.union([z.literal(""),z.string().regex(/^[0-9]{12}$/, "Enter a 12-digit Aadhaar number")]).optional()}).optional(),
+        jobInterests:z.array(z.string().max(40)).max(50).optional(),
+        generalDetails:z.preprocess(v=>v&&typeof v==="object"&&!Object.keys(v as object).length?undefined:v,z.object({description:z.string().trim().max(500).optional(),categoryDetails:z.record(z.string().max(80),z.string().trim().max(500)).optional()}).optional()),
+        pharmacyDetails:z.preprocess(v=>v&&typeof v==="object"&&!Object.keys(v as object).length?undefined:v,z.object({registered:z.enum(["Yes","No","Pending"]),council:z.string().trim().max(150),registrationNumber:z.string().trim().max(100),description:z.string().trim().max(500).optional(),workType:z.enum(["Full-time","Part-time","Both"]),expectedPay:z.number().int().min(0).max(10000000).nullable().optional()}).optional()),
+        nursingDetails:z.preprocess(v=>v&&typeof v==="object"&&!Object.keys(v as object).length?undefined:v,z.object({registered:z.enum(["Yes","No","Pending"]),council:z.string().trim().max(150),registrationNumber:z.string().trim().max(100),department:z.string().trim().max(150).optional(),nightShift:z.enum(["Yes","No","Open to discussion"]),description:z.string().trim().max(500).optional(),workType:z.enum(["Full-time","Part-time","Both"]),expectedPay:z.number().int().min(0).max(10000000).nullable().optional()}).optional()),
         currentPlaceId:z.string().nullable().optional(),
         preferredPlaceIds:z.array(z.string()).max(20).optional(),
         jobSeeking: z.boolean().optional(),
@@ -658,14 +709,21 @@ class Api {
         where: { userId: s.user.id },
       });
       await lock(t, "candidate:" + c.id);
+      if(c.profession==="GENERAL"){const cfg=await generalConfig(t);if(!b.jobInterests?.length)throw new BadRequestException("Choose at least one work interest");const allowed=cfg.categories.filter((v:any)=>v.active||c.jobInterests.includes(v.id)).map((v:any)=>v.id);if(b.jobInterests.some(v=>!allowed.includes(v)))throw new BadRequestException("Choose valid work categories");if(!b.education?.length)throw new BadRequestException("Add at least one qualification");}else if(b.generalDetails||b.jobInterests?.length)throw new BadRequestException("General details do not belong to this profile");
       if(c.profession==="PHARMACIST"){
         if(!b.pharmacyDetails)throw new BadRequestException("Pharmacy work and registration details required");
         if(b.pharmacyDetails.registered==="Yes"&&(!b.pharmacyDetails.council||!b.pharmacyDetails.registrationNumber))throw new BadRequestException("Pharmacy council and registration number required when registered");
-        if(!b.education?.length)throw new BadRequestException("Add at least one pharmacy qualification");
+        if(!b.education?.length)throw new BadRequestException("Add at least one professional qualification");
         for(const e of b.education)if(e.resultType==="Percentage"&&e.result&&(Number.isNaN(Number(e.result))||Number(e.result)<0||Number(e.result)>100))throw new BadRequestException("Education percentage must be between 0 and 100");
       }else if(b.pharmacyDetails)throw new BadRequestException("Pharmacy details do not belong to a teacher profile");
+      if(c.profession==="NURSE"){
+        if(!b.nursingDetails)throw new BadRequestException("Nursing work and registration details required");
+        if(b.nursingDetails.registered==="Yes"&&(!b.nursingDetails.council||!b.nursingDetails.registrationNumber))throw new BadRequestException("Nursing council and registration number required when registered");
+        if(!b.education?.length)throw new BadRequestException("Add at least one professional qualification");
+        for(const e of b.education)if(e.resultType==="Percentage"&&e.result&&(Number.isNaN(Number(e.result))||Number(e.result)<0||Number(e.result)>100))throw new BadRequestException("Education percentage must be between 0 and 100");
+      }else if(b.nursingDetails)throw new BadRequestException("Nursing details do not belong to a non-nursing profile");
       if(b.currentPlaceId){const place=await t.geoPlace.findUnique({where:{id:b.currentPlaceId}});if(!place)throw new BadRequestException("Choose a valid current place");b.location=place.name+", "+place.district;}
-      if(b.preferredPlaceIds?.length)b.preferredLocations=(await t.geoPlace.findMany({where:{id:{in:b.preferredPlaceIds}}})).map(p=>p.name);
+      if(b.preferredPlaceIds?.length){const names=(await t.geoPlace.findMany({where:{id:{in:b.preferredPlaceIds}}})).map(p=>p.name);b.preferredLocations=[...new Set([...(b.preferredLocations||[]),...names])].slice(0,20);}
       if(b.preferredPlaceIds?.length&&(await t.geoPlace.count({where:{id:{in:[...new Set(b.preferredPlaceIds)]}}}))!==new Set(b.preferredPlaceIds).size)throw new BadRequestException("Choose valid preferred locations");
       await requireFee(t, s.user, "PROFILE");
       await t.setting.upsert({
@@ -675,7 +733,7 @@ class Api {
       });
       const updated = await t.candidate.update({
         where: { id: c.id },
-        data: { ...b, profileReviewed: c.profileReviewed||(await t.setting.findUnique({where:{key:"teacher_auto_approve_enabled"}}))?.value===true, revision: { increment: 1 } },
+        data: { ...b, profileReviewed: c.profileReviewed||(c.profession==="GENERAL"?!(await generalConfig(t)).approvalRequired:(await t.setting.findUnique({where:{key:c.profession==="NURSE"?"nurse_auto_approve_enabled":c.profession==="PHARMACIST"?"pharmacist_auto_approve_enabled":"teacher_auto_approve_enabled"}}))?.value===true), revision: { increment: 1 } },
       });
       if (b.mobile !== c.mobile)
         await t.user.update({
@@ -716,7 +774,7 @@ class Api {
     const policy = await db.setting.findUnique({
       where: { key: "expired_subscription_job_policy" },
     });
-    if (policy?.value === "HIDE_AFTER_EXPIRY") {
+    if (profile?.profession!=="GENERAL" && policy?.value === "HIDE_AFTER_EXPIRY") {
       const allowed = await Promise.all(
         eligible.map(async (tenant) =>
           base.$transaction(async (t) => {
@@ -747,6 +805,7 @@ class Api {
     });
     return jobs.map((j) => ({
       ...j,
+      ...(profile?.profession==="GENERAL"?{eligibility:eligibility(profile,j),interestMatch:profile.jobInterests.includes(j.category||"")}:{}),
       institution: eligible.find((t) => t.id === j.tenantId)?.name,
     }));
   }
@@ -761,23 +820,27 @@ class Api {
     const u = await tenantActor(req);
     const b = z
       .object({
-        profession:z.enum(["TEACHER","PHARMACIST"]).default("TEACHER"),
+        profession:z.enum(["TEACHER","PHARMACIST","NURSE","GENERAL"]).default("TEACHER"),
+        category:z.string().max(40).optional(),requirements:requirementsSchema.optional(),
         title: publicText,
         subject: publicText,
         location: publicText,
-        salary: z.number().int().min(0),
+        salary: z.number().int().min(0).max(100000000),
+        salaryMax:z.number().int().min(0).max(100000000).optional(),
         description: z.string().min(20).max(5000),
         closesAt: z.string().datetime(),
       })
       .parse(body);
+    if(b.salaryMax!==undefined&&b.salaryMax<b.salary)throw new BadRequestException("Maximum salary must be at least minimum salary");
     if (new Date(b.closesAt) <= new Date())
       throw new BadRequestException("Closing date must be in the future");
     return tx(async (t) => {
       await lock(t, "tenant:" + u.tenantId);
       const employer=await t.tenant.findUniqueOrThrow({where:{id:u.tenantId}});if(!employer.recruitingProfessions.includes(b.profession))throw new ForbiddenException("Enable this profession in your institution profile first");
+      if(b.profession==="GENERAL"){const cfg=await generalConfig(t);if(!cfg.enabled)throw new ForbiddenException("General Jobs is disabled");if(!cfg.categories.some((v:any)=>v.id===b.category&&v.active))throw new BadRequestException("Choose an active work category");if(!b.requirements)throw new BadRequestException("Set qualification requirements");}
       await flag("institution_job_posting_enabled", t);
-      await requireFee(t, u, "JOB");
-      if (!(await pricing(t))?.enabled) {
+      await requireFee(t, u, "JOB","",b.profession);
+      if (b.profession!=="GENERAL" && !(await pricing(t))?.enabled) {
         const s = await currentSub(u.tenantId, t);
         if (!s) throw new ForbiddenException("Active subscription required");
         const p = s.snapshot as any;
@@ -804,15 +867,22 @@ class Api {
       return j;
     });
   }
+  @Patch("institution/jobs/:id") async editJob(@Req() req:any,@Param("id") id:string,@Body() body:any){
+    const u=await tenantActor(req);
+    const b=z.object({title:publicText,subject:publicText,location:publicText,salary:z.number().int().min(0).max(100000000),salaryMax:z.number().int().min(0).max(100000000).optional(),description:z.string().min(20).max(5000),category:z.string().max(40).optional(),requirements:requirementsSchema.optional(),closesAt:z.string().datetime()}).strict().parse(body);
+    if(b.salaryMax!==undefined&&b.salaryMax<b.salary)throw new BadRequestException("Maximum salary must be at least minimum salary");
+    if(new Date(b.closesAt)<=new Date())throw new BadRequestException("Closing date must be in the future");
+    return tx(async t=>{await lock(t,"tenant:"+u.tenantId);await lock(t,"job:"+id);const j=await t.job.findFirst({where:{id,tenantId:u.tenantId}});if(!j)throw new NotFoundException();if(j.status!=="PUBLISHED")throw new BadRequestException("Closed jobs cannot be edited");if(j.profession==="GENERAL"){const cfg=await generalConfig(t);if(!cfg.categories.some((v:any)=>v.id===b.category&&(v.active||j.category===v.id)))throw new BadRequestException("Choose a valid work category");if(!b.requirements)throw new BadRequestException("Set qualification requirements");}else if(b.category||b.requirements)throw new BadRequestException("General requirements only apply to General jobs");const updated=await t.job.update({where:{id},data:{...b,salaryMax:b.salaryMax??b.salary,closesAt:new Date(b.closesAt)}});await audit(t,u,"JOB_UPDATED",id,{fields:Object.keys(b),profession:j.profession});return updated;});
+  }
   @Patch("institution/jobs/:id/close") async closeJob(
     @Req() req: any,
     @Param("id") id: string,
   ) {
     const u = await tenantActor(req);
-    const result = await db.job.updateMany({
+    const result = await tx(async t=>{await lock(t,"tenant:"+u.tenantId);return t.job.updateMany({
       where: { id, tenantId: u.tenantId },
       data: { status: "CLOSED" },
-    });
+    });});
     if (!result.count) throw new NotFoundException();
     return { ok: true };
   }
@@ -833,6 +903,7 @@ class Api {
       if (!job || job.status !== "PUBLISHED" || job.closesAt <= new Date())
         throw new BadRequestException("Job is closed");
       if(job.profession!==c.profession)throw new ForbiddenException("This vacancy is for a different profession");
+      if(job.profession==="GENERAL"){const match=eligibility(c,job);if(!match.eligible)throw new ForbiddenException(match.reason);}
       const tenant = await t.tenant.findUniqueOrThrow({
         where: { id: job.tenantId },
       });
@@ -842,6 +913,7 @@ class Api {
         where: { key: "expired_subscription_job_policy" },
       });
       if (
+        job.profession!=="GENERAL" &&
         expiryPolicy?.value &&
         expiryPolicy.value !== "KEEP_UNTIL_CLOSE" &&
         !(await hasActivePlan(job.tenantId, t))
@@ -986,6 +1058,8 @@ class Api {
     @Query("place") place = "",
     @Query("session") session = "",
     @Query("page") page = "1",
+    @Query("category") category="",
+    @Query("subject") subject="",
     @Query("profession") profession="",
     @Query("near") near="",
     @Query("radius") radius="50",
@@ -1007,7 +1081,7 @@ class Api {
       if(origin){const places=await t.geoPlace.findMany({where:{latitude:{gte:origin.latitude-km/111.0,lte:origin.latitude+km/111.0},longitude:{gte:origin.longitude-km/(111*Math.cos(origin.latitude*Math.PI/180)),lte:origin.longitude+km/(111*Math.cos(origin.latitude*Math.PI/180))}}});for(const p of places){const d=distanceKm(origin.latitude,origin.longitude,p.latitude,p.longitude);if(d<=km){nearbyIds.push(p.id);distances.set(p.id,d);}}}
 
       let search: any = { id: "simple" };
-      if (!(await pricing(t))?.enabled) {
+      if (!professions.every((v:string)=>v==="GENERAL") && !(await pricing(t))?.enabled) {
         const s = await currentSub(u.tenantId, t);
         if (!s) throw new ForbiddenException("Active subscription required");
         search = session
@@ -1021,7 +1095,7 @@ class Api {
             })
           : null;
         const fingerprint = createHash("sha256")
-          .update(JSON.stringify([normalized,degree.trim().toLowerCase(),place.trim().toLowerCase(),professions,near,km,locationMode]))
+          .update(JSON.stringify([normalized,degree.trim().toLowerCase(),place.trim().toLowerCase(),professions,category,subject,near,km,locationMode]))
           .digest("hex");
         if (search && search.fingerprint !== fingerprint)
           throw new BadRequestException("Search session does not match query");
@@ -1065,20 +1139,25 @@ class Api {
       let rows = await t.candidate.findMany({
         where: {
           profession:{in:professions},
+          ...(category?{jobInterests:{has:category}}:{}),
+          ...(subject.trim()?{subject:{contains:subject.trim().slice(0,100),mode:"insensitive" as const}}:{}),
           ...(origin?(locationMode==="preferred"?{preferredPlaceIds:{hasSome:nearbyIds}}:{currentPlaceId:{in:nearbyIds}}):{}),
           active: true,
           directoryVisible: true,
           jobSeeking: true,
           profileReviewed: true,
-          ...(degree.trim()?{qualification:{in:[degree.trim().slice(0,100),degree.trim().replaceAll(".","").slice(0,100)],mode:"insensitive" as const}}:{}),
+          ...(degree.trim()&&!professions.includes("GENERAL")?{qualification:{in:[degree.trim().slice(0,100),degree.trim().replaceAll(".","").slice(0,100)],mode:"insensitive" as const}}:{}),
           ...(place.trim()?{location:{contains:place.trim().slice(0,100),mode:"insensitive" as const}}:{}),
           OR: [
             { subject: { contains: normalized, mode: "insensitive" } },
             { location: { contains: normalized, mode: "insensitive" } },
+            {profession:"GENERAL",AND:[{personalDetails:{path:["employmentStatus"],equals:"Currently working"}},{personalDetails:{path:["currentJobRole"],string_contains:normalized,mode:"insensitive"}}]},
           ],
         },
-        ...(origin?{}:{skip:(index-1)*12,take:12}),
+        ...((origin||professions.includes("GENERAL"))?{}:{skip:(index-1)*12,take:12}),
       });
+      if(professions.includes("GENERAL")&&degree.trim())rows=rows.filter(c=>(c.education as any[])?.some(e=>normalizeDegree(e.degree||"")===normalizeDegree(degree))||normalizeDegree(c.qualification)===normalizeDegree(degree));
+      if(!origin&&professions.includes("GENERAL"))rows=rows.slice((index-1)*12,index*12);
       if(origin){const candidateDistance=(c:any)=>locationMode==="preferred"?Math.min(...c.preferredPlaceIds.map((id:string)=>distances.get(id)??Infinity)):distances.get(c.currentPlaceId)||0;rows.sort((a,b)=>candidateDistance(a)-candidateDistance(b)||a.id.localeCompare(b.id));rows=rows.slice((index-1)*12,index*12);}
       const tenant = await t.tenant.findUnique({where:{id:u.tenantId}});
       const ids = rows.map(c=>c.id);
@@ -1090,7 +1169,7 @@ class Api {
     });
   }
   @Get("institution/candidates/:id/details") async candidateDetails(@Req() req:any,@Param("id") id:string) {
-    const u=await tenantActor(req);return tx(async t=>{const applicant=await t.application.findFirst({where:{tenantId:u.tenantId,candidateId:id}});if(!applicant)await flag("institution_candidate_search_enabled",t);const c=await t.candidate.findFirst({where:{id,active:true,profileReviewed:true,...(!applicant?{directoryVisible:true}:{})},include:{user:true}});if(!c)throw new NotFoundException();const tenant=await t.tenant.findUnique({where:{id:u.tenantId}});const unlock=await t.unlock.findUnique({where:{tenantId_candidateId:{tenantId:u.tenantId,candidateId:id}}});const application=await t.application.findFirst({where:{tenantId:u.tenantId,candidateId:id,contactConsent:true}});if(!tenant?.recruitingProfessions.includes(c.profession)&&!unlock&&!applicant)throw new ForbiddenException("Profession not selected by your institution");const allowed=!!tenant?.verified&&!tenant.blocked&&!!unlock&&contactAllowed(c.active,c.directoryConsent,!!application);return {...anonymous(c),currentPlace:c.currentPlaceId?await t.geoPlace.findUnique({where:{id:c.currentPlaceId}}):null,preferredPlaces:await t.geoPlace.findMany({where:{id:{in:c.preferredPlaceIds}}}),unavailableReport:await t.unavailableReport.findFirst({where:{tenantId:u.tenantId,candidateId:id},select:{status:true,restoreCredit:true,markUnavailable:true,decisionReason:true}}),jobSeeking:c.jobSeeking,availability:c.availability,noticeDays:c.noticeDays,employmentStatus:(c.personalDetails as any)?.employmentStatus||"",teachingMedium:(c.personalDetails as any)?.teachingMedium==="Other"?(c.personalDetails as any)?.otherTeachingMedium:(c.personalDetails as any)?.teachingMedium,contactUnlocked:allowed,...(allowed?{pharmacyDetails:c.pharmacyDetails,contact:{name:c.user.name,email:c.user.email,mobile:c.mobile,address:(c.personalDetails as any)?.address||""},education:c.education,experienceEntries:c.experienceEntries,skills:c.skills,subjects:c.subjects,preferredLocations:c.preferredLocations}:{})};});
+    const u=await tenantActor(req);return tx(async t=>{const applicant=await t.application.findFirst({where:{tenantId:u.tenantId,candidateId:id}});if(!applicant)await flag("institution_candidate_search_enabled",t);const c=await t.candidate.findFirst({where:{id,active:true,profileReviewed:true,...(!applicant?{directoryVisible:true}:{})},include:{user:true}});if(!c)throw new NotFoundException();const tenant=await t.tenant.findUnique({where:{id:u.tenantId}});const unlock=await t.unlock.findUnique({where:{tenantId_candidateId:{tenantId:u.tenantId,candidateId:id}}});const application=await t.application.findFirst({where:{tenantId:u.tenantId,candidateId:id,contactConsent:true}});if(!tenant?.recruitingProfessions.includes(c.profession)&&!unlock&&!applicant)throw new ForbiddenException("Profession not selected by your institution");const allowed=!!tenant?.verified&&!tenant.blocked&&!!unlock&&contactAllowed(c.active,c.directoryConsent,!!application);return {...anonymous(c),currentPlace:c.currentPlaceId?await t.geoPlace.findUnique({where:{id:c.currentPlaceId}}):null,preferredPlaces:await t.geoPlace.findMany({where:{id:{in:c.preferredPlaceIds}}}),unavailableReport:await t.unavailableReport.findFirst({where:{tenantId:u.tenantId,candidateId:id},select:{status:true,restoreCredit:true,markUnavailable:true,decisionReason:true}}),jobSeeking:c.jobSeeking,availability:c.availability,noticeDays:c.noticeDays,employmentStatus:(c.personalDetails as any)?.employmentStatus||"",teachingMedium:(c.personalDetails as any)?.teachingMedium==="Other"?(c.personalDetails as any)?.otherTeachingMedium:(c.personalDetails as any)?.teachingMedium,contactUnlocked:allowed,...(allowed?{generalDetails:c.generalDetails,pharmacyDetails:c.pharmacyDetails,nursingDetails:c.nursingDetails,contact:{name:c.user.name,email:c.user.email,mobile:c.mobile,address:(c.personalDetails as any)?.address||""},education:c.education,experienceEntries:c.experienceEntries,skills:c.skills,subjects:c.subjects,preferredLocations:c.preferredLocations}:{})};});
   }
   @Post("institution/applications/:id/viewed") async markApplicationViewed(@Req() req:any,@Param("id") id:string){
     const u=await tenantActor(req);
@@ -1174,7 +1253,7 @@ class Api {
         throw new ForbiddenException("Institution verification required");
       if (!application && !c.directoryVisible)
         throw new ForbiddenException("Candidate not discoverable");
-      const cfg = await pricing(t);
+      const cfg = await creditPricing(t,c.profession);
       if (cfg?.enabled && !cfg.unlockPaid) {
         await t.unlock.create({
           data: { tenantId: u.tenantId, candidateId: id, actorId: u.id },
@@ -1193,6 +1272,7 @@ class Api {
       const grant = await t.creditGrant.findFirst({
         where: {
           tenantId: u.tenantId,
+          profession:c.profession,
           ...(cfg?.enabled
             ? {
                 OR: [
@@ -1218,6 +1298,7 @@ class Api {
         data: {
           tenantId: u.tenantId,
           grantId: grant.id,
+          profession:grant.profession,
           delta: -1,
           type: "CANDIDATE_UNLOCK",
           reference: unlocked.id,
@@ -1450,12 +1531,14 @@ class Api {
       tenant: await db.tenant.findUnique({ where: { id: u.tenantId } }),
       subscription: sub,
       pricing: cfg,
+      professionBalances:await db.creditGrant.groupBy({by:["profession"],where:{tenantId:u.tenantId,remaining:{gt:0},expiresAt:{gt:new Date()}},_sum:{remaining:true}}),
       credits:
         sub || cfg?.enabled
           ? (
               await db.creditGrant.aggregate({
                 where: {
                   tenantId: u.tenantId,
+                  profession:"TEACHER",
                   ...(cfg?.enabled
                     ? {
                         OR: [
@@ -1549,10 +1632,10 @@ class Api {
     return tx(async t=>{const r=await t.unavailableReport.findUniqueOrThrow({where:{id}});await lock(t,"candidate:"+r.candidateId);await lock(t,"tenant:"+r.tenantId);await lock(t,"unavailable-report:"+id);
       const fresh=await t.unavailableReport.findUniqueOrThrow({where:{id}});if(fresh.status!=="PENDING")throw new BadRequestException("Report already reviewed");
       if(b.restoreCredit){const debit=await t.creditTransaction.findUnique({where:{reference:r.unlockId}});if(!debit||debit.tenantId!==r.tenantId||debit.delta!==-1||debit.type!=="CANDIDATE_UNLOCK")throw new BadRequestException("No paid credit was used for this unlock");
-        const cfg=await pricing(t),sub=await currentSub(r.tenantId,t);if(!cfg?.enabled&&!sub)throw new BadRequestException("Institution needs an active subscription before a replacement credit can be issued");
+        const cfg=await creditPricing(t,debit.profession),sub=await currentSub(r.tenantId,t);if(!cfg?.enabled&&!sub)throw new BadRequestException("Institution needs an active subscription before a replacement credit can be issued");
         const expiresAt=new Date(Date.now()+b.validityDays*86400000);
-        const grant=await t.creditGrant.create({data:{tenantId:r.tenantId,subscriptionId:cfg?.enabled?"pack:replacement:"+r.id:sub!.id,remaining:1,amount:1,expiresAt}});
-        await t.creditTransaction.create({data:{tenantId:r.tenantId,grantId:grant.id,delta:1,type:"REPLACEMENT_CREDIT",reference:"replacement:"+r.unlockId,actorId:u.id}});
+        const grant=await t.creditGrant.create({data:{tenantId:r.tenantId,profession:debit.profession,subscriptionId:cfg?.enabled?"pack:replacement:"+r.id:sub!.id,remaining:1,amount:1,expiresAt}});
+        await t.creditTransaction.create({data:{tenantId:r.tenantId,grantId:grant.id,profession:debit.profession,delta:1,type:"REPLACEMENT_CREDIT",reference:"replacement:"+r.unlockId,actorId:u.id}});
         await audit(t,{...u,tenantId:r.tenantId},"REPLACEMENT_CREDIT_GRANTED",r.id,{unlockId:r.unlockId,credits:1,expiresAt,reason:b.reason});
         await notifyTenant(t,r.tenantId,"Replacement credit approved","1 credit has been returned to your institution. Valid until "+expiresAt.toLocaleDateString("en-IN",{timeZone:"Asia/Kolkata"})+".");
       }
@@ -1569,32 +1652,27 @@ class Api {
     const [total,rows,actions]=await Promise.all([db.audit.count({where}),db.audit.findMany({where,orderBy:{createdAt:"desc"},skip:(page-1)*size,take:size}),db.audit.findMany({distinct:["action"],select:{action:true},orderBy:{action:"asc"}})]);
     const safe=(value:any):any=>Array.isArray(value)?value.map(safe):value&&typeof value==="object"?Object.fromEntries(Object.entries(value).filter(([key])=>!/password|otp|aadhaar|token|secret|mobile|email|address/i.test(key)).map(([key,v])=>[key,safe(v)])):value;
     const items=await Promise.all(rows.map(async row=>{const candidate=/CANDIDATE_UNLOCK/.test(row.action)?await db.candidate.findUnique({where:{id:row.entityId},select:{displayId:true,qualification:true,location:true}}):null;return {...row,details:safe(row.details),candidate,user:await db.user.findUnique({where:{id:row.actorId},select:{name:true,email:true}}),institution:row.tenantId?(await db.tenant.findUnique({where:{id:row.tenantId},select:{name:true}}))?.name:null};}));
-    return {items,total,actions:[...new Set(["AUTH_LOGIN","AUTH_LOGIN_FAILED","AUTH_LOGOUT","ACCOUNT_CREATED","APPLICATION_SUBMITTED","APPLICATION_VIEWED","CANDIDATE_UNLOCKED","FREE_CANDIDATE_UNLOCK","HIRING_STAGE_CHANGED","NOTE_ADDED","INTERVIEW_SCHEDULED","PAYMENT_APPROVED","PAYMENT_REJECTED",...actions.map(a=>a.action)])].sort()};
+    return {items,total,actions:[...new Set(["AUTH_LOGIN","AUTH_LOGIN_FAILED","AUTH_LOGOUT","AUTH_PASSWORD_RESET","ACCOUNT_CREATED","APPLICATION_SUBMITTED","APPLICATION_VIEWED","CANDIDATE_UNLOCKED","FREE_CANDIDATE_UNLOCK","HIRING_STAGE_CHANGED","NOTE_ADDED","INTERVIEW_SCHEDULED","PAYMENT_APPROVED","PAYMENT_REJECTED",...actions.map(a=>a.action)])].sort()};
   }
-  @Get("admin/overview") async adminOverview(@Req() req: any) {
-    await actor(req, ["SUPER_ADMIN", "PLATFORM_ADMIN"]);
-    return {
-      tenants: await Promise.all((await db.tenant.findMany()).map(async tenant => {
-        const profile = (await db.setting.findUnique({where:{key:"institution-profile:"+tenant.id}}))?.value as any;
-        const owner = await db.user.findFirst({where:{tenantId:tenant.id,role:"TENANT_ADMIN"},select:{name:true,email:true}});
-        return {...tenant,contactPerson:profile?.contactPerson||owner?.name||"",mobile:profile?.mobile||"",officialEmail:profile?.officialEmail||owner?.email||"",address:profile?.address||"",type:profile?.type||""};
-      })),
-      payments: await db.paymentRequest.findMany({
-        orderBy: { createdAt: "desc" },
-      }),
-      plans: await db.plan.findMany(),
-      settings: await db.setting.findMany({
-        where: { NOT: { key: { startsWith: "institution-profile:" } } },
-      }),
-      audit: await db.audit.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 100,
-      }),
-      candidateCount: await db.candidate.count(),
-      commerceReviewCount: await db.commerceOrder.count({
-        where: { status: "UNDER_REVIEW" },
-      }),
-    };
+  @Get("admin/institutions") async adminInstitutions(@Req() req:any) {
+    await actor(req,["SUPER_ADMIN","PLATFORM_ADMIN"]);
+    const [tenants,profiles,owners]=await Promise.all([
+      db.tenant.findMany({orderBy:{createdAt:"desc"}}),
+      db.setting.findMany({where:{key:{startsWith:"institution-profile:"}}}),
+      db.user.findMany({where:{role:"TENANT_ADMIN"},select:{tenantId:true,name:true,email:true},orderBy:{createdAt:"asc"}})
+    ]);
+    const profileMap=new Map(profiles.map(p=>[p.key,p.value as any]));
+    const ownerMap=new Map<string,any>();for(const u of owners)if(u.tenantId&&!ownerMap.has(u.tenantId))ownerMap.set(u.tenantId,u);
+    return {tenants:tenants.map(t=>{const p=profileMap.get("institution-profile:"+t.id),u=ownerMap.get(t.id);return {...t,contactPerson:p?.contactPerson||u?.name||"",mobile:p?.mobile||"",officialEmail:p?.officialEmail||u?.email||"",address:p?.address||"",type:p?.type||""};})};
+  }
+  @Get("admin/settings-view") async adminSettingsView(@Req() req:any){await actor(req,["SUPER_ADMIN","PLATFORM_ADMIN"]);const [settings,cfg]=await Promise.all([db.setting.findMany({where:{NOT:{key:{startsWith:"institution-profile:"}}}}),generalConfig(db)]);return {settings:[...settings,{key:"general_auto_approve_enabled",value:!cfg.approvalRequired}]};}
+  @Get("admin/payments-view") async adminPaymentsView(@Req() req:any){await actor(req,["SUPER_ADMIN","PLATFORM_ADMIN"]);const [payments,tenants]=await Promise.all([db.paymentRequest.findMany({orderBy:{createdAt:"desc"}}),db.tenant.findMany({select:{id:true,name:true}})]);return {payments,tenants};}
+  @Get("admin/overview") async adminOverview(@Req() req:any){
+    await actor(req,["SUPER_ADMIN","PLATFORM_ADMIN"]);
+    const [directory,payments,plans,settings,audit,candidateCount,commerceReviewCount,cfg]=await Promise.all([
+      this.adminInstitutions(req),db.paymentRequest.findMany({orderBy:{createdAt:"desc"}}),db.plan.findMany(),db.setting.findMany({where:{NOT:{key:{startsWith:"institution-profile:"}}}}),db.audit.findMany({orderBy:{createdAt:"desc"},take:100}),db.candidate.count(),db.commerceOrder.count({where:{status:"UNDER_REVIEW"}}),generalConfig(db)
+    ]);
+    return {tenants:directory.tenants,payments,plans,settings:[...settings,{key:"general_auto_approve_enabled",value:!cfg.approvalRequired}],audit,candidateCount,commerceReviewCount};
   }
   @Patch("admin/tenants/:id") async verify(
     @Req() req: any,
@@ -1620,8 +1698,14 @@ class Api {
     @Body() body: any,
   ) {
     const s = await actor(req, ["SUPER_ADMIN"]);
+    if(key==="general_auto_approve_enabled"){
+      const enabled=z.boolean().parse(body.value);
+      return tx(async t=>{await lock(t,"general-config");const cfg=await generalConfig(t);const value={...cfg,approvalRequired:!enabled};await t.setting.upsert({where:{key:"general_jobs"},create:{key:"general_jobs",value},update:{value,version:{increment:1}}});if(enabled){const result=await approveSavedProfiles(t,"GENERAL");await audit(t,s.user,"PENDING_PROFILES_AUTO_APPROVED",key,{profession:"GENERAL",count:result.count});}await audit(t,s.user,"SETTING_UPDATED",key,{before:!cfg.approvalRequired,after:enabled});return {key,value:enabled};});
+    }
     let value: any;
-    if (key === "simple_pricing") {
+    if (["credit_pricing:PHARMACIST","credit_pricing:NURSE"].includes(key)) {
+      value=z.object({enabled:z.literal(true),unlockPaid:z.boolean(),packPrice:z.number().int().min(100).max(10000000),packCredits:z.number().int().min(1).max(10000),validityDays:z.number().int().min(1).max(3650)}).parse(body.value);
+    } else if (key === "simple_pricing") {
       value = z
         .object({
           enabled: z.boolean(),
@@ -1663,6 +1747,8 @@ class Api {
           "institution_candidate_search_enabled",
           "institution_candidate_unlock_enabled",
           "teacher_auto_approve_enabled",
+          "pharmacist_auto_approve_enabled",
+          "nurse_auto_approve_enabled",
         ].includes(key)
       )
         throw new BadRequestException("Unknown setting");
@@ -1675,7 +1761,8 @@ class Api {
         create: { key, value },
         update: { value, version: { increment: 1 } },
       });
-      if(key==="teacher_auto_approve_enabled"&&value===true){const activated=await t.setting.findMany({where:{key:{startsWith:"profile-activation:"},value:{equals:true}}});const result=await t.candidate.updateMany({where:{userId:{in:activated.map((v:any)=>v.key.slice("profile-activation:".length))},profileReviewed:false,user:{active:true}},data:{profileReviewed:true}});await audit(t,s.user,"PENDING_PROFILES_AUTO_APPROVED",key,{count:result.count});}
+      const approvalProfession:any={teacher_auto_approve_enabled:"TEACHER",pharmacist_auto_approve_enabled:"PHARMACIST",nurse_auto_approve_enabled:"NURSE"};
+      if(approvalProfession[key]&&value===true){const result=await approveSavedProfiles(t,approvalProfession[key]);await audit(t,s.user,"PENDING_PROFILES_AUTO_APPROVED",key,{profession:approvalProfession[key],count:result.count});}
       await audit(t, s.user, "SETTING_UPDATED", key, {
         before: old?.value ?? null,
         after: value,
@@ -1871,8 +1958,9 @@ class Api {
     const b = z
       .object({
         name: z.string().min(2).max(150),
-        recruitingProfessions:z.array(z.enum(["TEACHER","PHARMACIST"])).min(1).max(2).optional(),
-        type: z.enum(["School", "College", "University", "Coaching", "Medical shop", "Hospital", "Other"]),
+        generalCategories:z.array(z.string().max(40)).max(50).optional(),
+        recruitingProfessions:z.array(z.enum(["TEACHER","PHARMACIST","NURSE","GENERAL"])).min(1).max(4).optional(),
+        type: z.enum(["School", "College", "University", "Coaching", "Medical shop", "Hospital", "Medical college", "Clinic", "Bank", "Showroom", "Company", "Other"]),
         address: z.string().max(1000),
         contactPerson: z.string().max(100),
         officialEmail: z.string().email(),
@@ -1885,10 +1973,12 @@ class Api {
       const old = await t.tenant.findUniqueOrThrow({
         where: { id: s.user.tenantId! },
       });
+      if(b.recruitingProfessions?.includes("GENERAL")){const cfg=await generalConfig(t);if(!b.generalCategories?.length)throw new BadRequestException("Choose recruiting work categories");if(b.generalCategories.some(id=>!cfg.categories.some((c:any)=>c.id===id&&(c.active||old.generalCategories.includes(id)))))throw new BadRequestException("Choose valid work categories");}
       await t.tenant.update({
         where: { id: old.id },
         data: {
           name: b.name,
+          ...(b.generalCategories?{generalCategories:b.generalCategories}:{}),
           ...(b.recruitingProfessions?{recruitingProfessions:[...new Set(b.recruitingProfessions)]}:{}),
           verified: old.name === b.name ? old.verified : false,
         },
@@ -2010,7 +2100,7 @@ class Api {
     return tx(async (t) => {
       await lock(t, "candidate:" + id);
       const c = await t.candidate.findUniqueOrThrow({ where: { id } });
-      if (b.profileReviewed) await requireFee(t, { id: c.userId }, "PROFILE");
+      if (b.profileReviewed) await requireFee(t, { id: c.userId,role:"CANDIDATE" }, "PROFILE");
       if (b.profileReviewed && b.revision !== c.revision)
         throw new BadRequestException(
           "The profile changed. Refresh before approving.",
@@ -2044,9 +2134,7 @@ class Api {
       where: { id, tenantId: u.tenantId },
     });
     if (!i) throw new NotFoundException();
-    const payment = await db.paymentRequest.findUniqueOrThrow({
-      where: { id: i.paymentId },
-    });
+    const payment = await db.paymentRequest.findUnique({where:{id:i.paymentId}}) || await db.commerceOrder.findUniqueOrThrow({where:{id:i.paymentId}});
     const tenant = await db.tenant.findUniqueOrThrow({
       where: { id: u.tenantId },
     });
@@ -2057,16 +2145,18 @@ class Api {
       'attachment; filename="' + i.number + '.pdf"',
     );
     doc.pipe(res);
-    doc.fontSize(25).text("CampusFaculty");
+    doc.fontSize(25).text("TeliCareers");
     doc.moveDown().fontSize(16).text("Payment receipt / invoice");
     doc
       .fontSize(11)
       .text("Reference: " + i.number)
       .text("Issued: " + i.createdAt.toISOString().slice(0, 10))
       .text("Institution: " + tenant.name)
-      .text("Plan: " + (payment.snapshot as any).name)
+      .text("Plan: " + ((payment.snapshot as any).name||((payment.snapshot as any).profession+" unlock pack")))
       .text("Amount paid: INR " + (i.amount / 100).toFixed(2))
-      .text("Method: Manual UPI")
+      .text("Method: "+((payment.snapshot as any).paymentMethod==="CASH"?"Cash":"Manual UPI"))
+      .text("Payment date: "+((payment.snapshot as any).paymentDate||i.createdAt.toISOString().slice(0,10)))
+      .text("Receipt reference: "+((payment.snapshot as any).receiptReference||payment.utr||i.number))
       .moveDown()
       .text(
         "Tax treatment and statutory invoice particulars must be configured before production use.",
@@ -2222,6 +2312,8 @@ async function main() {
   const app = await NestFactory.create(AppModule);
   app.use(helmet());
   app.use(cookieParser());
+  // Trust client addresses only through the local reverse proxy.
+  app.getHttpAdapter().getInstance().set("trust proxy","loopback");
   app.enableCors({
     origin: process.env.WEB_ORIGIN || "http://localhost:5182",
     credentials: true,

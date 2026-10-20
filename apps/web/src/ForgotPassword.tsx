@@ -1,0 +1,16 @@
+import {useEffect,useState} from "react";
+import {Button} from "./components/ui/button";
+export function ForgotPassword({api,onBack}:any){
+ const [enabled,E]=useState<boolean|null>(null),[email,M]=useState(""),[challenge,C]=useState(""),[code,K]=useState(""),[password,P]=useState(""),[confirm,Q]=useState(""),[busy,B]=useState(false),[error,F]=useState(""),[message,S]=useState(""),[done,D]=useState(false),[wait,W]=useState(0);
+ useEffect(()=>{api("auth/password-reset/config").then((v:any)=>E(v.enabled===true)).catch(()=>{E(false);F("Password recovery is temporarily unavailable. Please try again later.")})},[]);
+ useEffect(()=>{if(!wait)return;const id=setTimeout(()=>W(n=>Math.max(0,n-1)),1000);return()=>clearTimeout(id)},[wait]);
+ async function request(){B(true);F("");try{const r=await api("auth/password-reset/request","POST",{email});C(r.challengeId);K("");P("");Q("");S(r.message);W(r.resendAfter||60)}catch(e:any){F(e.message)}finally{B(false)}}
+ return <section className="card auth-card" aria-labelledby="forgot-title"><h2 id="forgot-title">{done?"Password updated":"Forgot password?"}</h2>{enabled===null?<p role="status">Checking recovery options...</p>:!enabled?<p role="status">Email password recovery is not available yet. Please try again after email setup is complete.</p>:done?<p role="status">Your password has been changed. All existing sessions have been signed out. Sign in with your new password.</p>:<form onSubmit={async e=>{e.preventDefault();if(!challenge){await request();return}if(password!==confirm){F("Passwords do not match.");return}B(true);F("");try{await api("auth/password-reset/confirm","POST",{challengeId:challenge,code,password,confirmPassword:confirm});P("");Q("");K("");C("");S("");D(true)}catch(e:any){F(e.message)}finally{B(false)}}}>
+ <p>{challenge?"Enter the code from your email and choose a new password.":"Enter the email address you used to register. We will send a six-digit reset code."}</p>
+ <label>Registered email<input type="email" required maxLength={254} autoComplete="email" value={email} disabled={busy||!!challenge} onChange={e=>M(e.target.value)}/></label>
+ {message&&<p role="status">{message}</p>}
+ {challenge&&<><label>Email code<input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e=>K(e.target.value.replace(/\D/g,""))}/></label><label>New password<input required type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={e=>P(e.target.value)}/></label><label>Confirm new password<input required type="password" autoComplete="new-password" minLength={8} maxLength={128} value={confirm} onChange={e=>Q(e.target.value)}/></label></>}
+ <Button disabled={busy} type="submit">{busy?"Please wait...":challenge?"Set new password":"Send code"}</Button>
+ {challenge&&<div className="card-actions"><Button type="button" variant="outline" disabled={busy||wait>0} onClick={request}>{wait>0?"Resend in "+wait+"s":"Resend code"}</Button><Button type="button" variant="ghost" disabled={busy} onClick={()=>{C("");S("");F("");K("");P("");Q("")}}>Change email</Button></div>}
+ </form>}{error&&<p role="alert" className="alert error">{error}</p>}<button type="button" className="text-button" disabled={busy} onClick={onBack}>Back to sign in</button></section>
+}

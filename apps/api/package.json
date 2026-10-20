@@ -11,28 +11,31 @@
     "test": "tsx --test src/policy.test.ts",
     "worker": "tsx src/worker.ts",
     "test:integration": "tsx --test src/integration.test.ts",
-    "db:runtime": "node scripts/local-runtime.cjs"
+    "db:runtime": "node scripts/local-runtime.cjs",
+    "test:recovery": "tsx --test src/password-recovery.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
     "@prisma/client": "6.19.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.6.1",
+    "helmet": "^8.1.0",
+    "nodemailer": "^10.1.1",
+    "pdfkit": "^0.17.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "cookie-parser": "^1.4.7",
-    "helmet": "^8.1.0",
-    "dotenv": "^16.6.1",
-    "zod": "^3.25.0",
-    "pdfkit": "^0.17.2"
+    "zod": "^3.25.0"
   },
   "devDependencies": {
-    "prisma": "6.19.0",
-    "typescript": "^5.9.0",
-    "tsx": "^4.20.0",
-    "@types/node": "^22.0.0",
-    "@types/express": "^5.0.0",
     "@types/cookie-parser": "^1.4.9",
-    "@types/pdfkit": "^0.17.3"
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pdfkit": "^0.17.3",
+    "prisma": "6.19.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
   }
 }

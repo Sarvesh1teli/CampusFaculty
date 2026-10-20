@@ -1,3 +1,4 @@
+import {generalConfig,eligibility} from "./general";
 import { canReapply } from "./policy";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
 export const defaultPricing = {
@@ -12,10 +13,17 @@ export const defaultPricing = {
 };
 export async function pricing(t: any) {
   const s = await t.setting.findUnique({ where: { key: "simple_pricing" } });
-  return s?.value || null;
+  return s?.value || defaultPricing;
 }
-export async function requireFee(t: any, u: any, kind: string, target = "") {
-  const cfg = await pricing(t);
+export async function creditPricing(t:any,profession="TEACHER") {
+ if(profession==="GENERAL")return {...await generalConfig(t),enabled:true};
+ if(profession==="TEACHER")return pricing(t);
+ const s=await t.setting.findUnique({where:{key:"credit_pricing:"+profession}});
+ return s?.value||{enabled:true,unlockPaid:true,packPrice:20000,packCredits:5,validityDays:365};
+}
+export async function requireFee(t: any, u: any, kind: string, target = "",profession?:string) {
+  if(!profession&&u.role==="CANDIDATE")profession=(await t.candidate.findUnique({where:{userId:u.id}}))?.profession;
+  const cfg = profession==="GENERAL"?{...await generalConfig(t),enabled:true}:await pricing(t);
   if (!cfg?.enabled) return;
   if (
     kind === "PROFILE" &&
@@ -37,16 +45,18 @@ export async function requireFee(t: any, u: any, kind: string, target = "") {
     "SELECT pg_advisory_xact_lock(hashtext($1))::text",
     "fee:" + (kind === "JOB" ? u.tenantId : u.id),
   );
-  const order = await t.commerceOrder.findFirst({
+  const feeOrders = await t.commerceOrder.findMany({
     where: {
       ...(kind === "JOB" ? { tenantId: u.tenantId } : { userId: u.id }),
       kind,
+
       target,
       status: "APPROVED",
       ...(kind === "PROFILE" ? {} : { consumedAt: null }),
     },
     orderBy: { createdAt: "asc" },
   });
+  const order=feeOrders.find((o:any)=>profession==="GENERAL"?o.snapshot.profession==="GENERAL":o.snapshot.profession!=="GENERAL");
   if (!order)
     throw new ForbiddenException(
       "Payment approval required. Open Payments to purchase " +
@@ -69,8 +79,11 @@ export async function createOrder(
   kind: string,
   quantity: number,
   target: string,
+  profession="TEACHER",
 ) {
-  const cfg = await pricing(t);
+  if(u.role==="CANDIDATE")profession=(await t.candidate.findUnique({where:{userId:u.id}}))?.profession||profession;
+  const cfg = kind==="UNLOCK_PACK"?await creditPricing(t,profession):profession==="GENERAL"?{...await generalConfig(t),enabled:true}:await pricing(t);
+  if(kind==="UNLOCK_PACK"||kind==="JOB"){const tenant=await t.tenant.findUnique({where:{id:u.tenantId}});if(!tenant?.recruitingProfessions.includes(profession))throw new ForbiddenException("Profession not selected by your institution");}
   if (
     kind === "PROFILE" &&
     (
@@ -112,6 +125,7 @@ export async function createOrder(
     const job = await t.job.findUnique({ where: { id: target } });
     if (!job || job.status !== "PUBLISHED" || job.closesAt <= new Date())
       throw new BadRequestException("Job is closed");
+    const candidate=await t.candidate.findUniqueOrThrow({where:{id:candidateId}});if(candidate.profession!==job.profession)throw new ForbiddenException("This vacancy is for a different profession");const match=eligibility(candidate,job);if(!match.eligible)throw new ForbiddenException(match.reason);
     const a = await t.application.findFirst({
       where: { jobId: target, candidateId },
       orderBy: { attempt: "desc" },
@@ -144,20 +158,23 @@ export async function createOrder(
     "order:" + u.id,
   );
   if (kind !== "UNLOCK_PACK") {
-    const existing = await t.commerceOrder.findFirst({
+    const existingOrders = await t.commerceOrder.findMany({
       where: {
         userId: u.id,
         kind,
+        ...(profession==="GENERAL"?{snapshot:{path:["profession"],equals:"GENERAL"}}:{}),
         target,
         status: { in: ["AWAITING_PAYMENT", "UNDER_REVIEW", "APPROVED"] },
         ...(kind === "PROFILE" ? {} : { consumedAt: null }),
       },
     });
-    if (existing) return existing;
+    const existing=existingOrders.find((o:any)=>profession==="GENERAL"?o.snapshot.profession==="GENERAL":o.snapshot.profession!=="GENERAL");
+      if (existing) return existing;
   }
   const subtotal = unit * quantity;
   const snapshot = {
     kind,
+    profession,
     quantity,
     unitPrice: unit,
     credits: kind === "UNLOCK_PACK" ? cfg.packCredits * quantity : 0,

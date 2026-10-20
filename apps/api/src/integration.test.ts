@@ -93,18 +93,19 @@ test(
         },
       },
     });
+    const runtimeRole=new URL(process.env.DATABASE_URL!).username;assert.match(runtimeRole,/^[a-z_][a-z0-9_]*$/);
     await db.$executeRawUnsafe(
-      'GRANT USAGE ON SCHEMA "' + schema + '", app_private TO cf_runtime',
+      'GRANT USAGE ON SCHEMA "' + schema + '", app_private TO ' + runtimeRole,
     );
     await db.$executeRawUnsafe(
       'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "' +
         schema +
-        '" TO cf_runtime',
+        '" TO ' + runtimeRole,
     );
     await db.$executeRawUnsafe(
       'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "' +
         schema +
-        '" TO cf_runtime',
+        '" TO ' + runtimeRole,
     );
     const runtimeUrl = new URL(process.env.DATABASE_URL!);
     runtimeUrl.searchParams.set("schema", schema);
@@ -168,6 +169,7 @@ test(
         { email: "test-owner@example.com", password: pass },
         201,
       );
+      await db.setting.create({data:{key:'simple_pricing',value:{enabled:false}}});
       for (const name of ["A", "B"])
         await request(
           name,
@@ -900,7 +902,7 @@ test(
       await request('A','institution/candidates/'+pharma1.id+'/unlock','POST',{},403);
       const employerProfile={name:'New Simple School',type:'Medical shop',address:'Test',contactPerson:'Tester',officialEmail:'C@example.com',mobile:'',website:'',registrationDetails:'',recruitingProfessions:['PHARMACIST']};
       await request('C','institution/profile','PATCH',employerProfile);
-      const pharmaOnly=await request('C','institution/candidates?q=');assert.ok(pharmaOnly.items.length);assert.ok(pharmaOnly.items.every((c:any)=>c.profession==='PHARMACIST'));
+      const pharmaOnly=await request('C','institution/candidates?q=');assert.ok(pharmaOnly.items.every((c:any)=>Array.isArray(c.preferredLocations)));assert.ok(pharmaOnly.items.find((c:any)=>c.id===pharma1.id).preferredLocations.includes('Test origin'));assert.ok(pharmaOnly.items.length);assert.ok(pharmaOnly.items.every((c:any)=>c.profession==='PHARMACIST'));
       const lockedPharma=await request('C','institution/candidates/'+pharma1.id+'/details');assert.equal(lockedPharma.contactUnlocked,false);assert.equal(lockedPharma.pharmacyDetails,undefined);assert.ok(!JSON.stringify(lockedPharma).includes('PRIVATE-REG-123'));
       await request('pharma2','auth/register','POST',{email:'pharma2@example.com',password:pass,name:'Pharmacy Two',role:'CANDIDATE',profession:'PHARMACIST'},201);
       await request('pharma2','profile','PATCH',{...pharmacyFields,currentPlaceId:'test-far'});const pharma2=await request('pharma2','profile');await request('owner','admin/candidates/'+pharma2.id,'PATCH',{profileReviewed:true,revision:pharma2.revision});
@@ -914,6 +916,126 @@ test(
       assert.ok((await request('pharma1','jobs')).every((j:any)=>j.profession==='PHARMACIST'));
       await request('teacher','jobs/'+pharmacyJob.id+'/apply','POST',{contactConsent:true},403);
       assert.ok(!(await request('teacher','jobs')).some((j:any)=>j.id===pharmacyJob.id));
+      await request('nurse','auth/register','POST',{email:'nurse@example.com',password:pass,name:'Nurse Test',role:'CANDIDATE',profession:'NURSE'},201);
+      const nurseFields={...pharmacyFields,pharmacyDetails:undefined,subject:'Nurse',qualification:'GNM / Diploma Nursing',education:[{...pharmacyFields.education[0],degree:'GNM / Diploma Nursing'}],nursingDetails:{registered:'Yes',council:'Test nursing council',registrationNumber:'PRIVATE-NURSE-123',workType:'Both',expectedPay:25000,department:'ICU',nightShift:'Yes',description:'Experienced ICU nurse'}};
+      await request('nurse','profile','PATCH',nurseFields);
+      const nurse=await request('nurse','profile');assert.equal(nurse.profession,'NURSE');assert.match(nurse.displayId,/^NU/);assert.equal(nurse.nursingDetails.nightShift,'Yes');
+      await request('nurse','profile','PATCH',{...nurseFields,nursingDetails:{...nurseFields.nursingDetails,nightShift:'invalid'}},400);
+      await request('owner','admin/candidates/'+nurse.id,'PATCH',{profileReviewed:true,revision:nurse.revision});
+      await request('A','institution/candidates/'+nurse.id+'/details','GET',undefined,403);
+      await request('C','institution/profile','PATCH',{...employerProfile,recruitingProfessions:['PHARMACIST','TEACHER','NURSE']});
+      const nurses=await request('C','institution/candidates?profession=NURSE');assert.equal(nurses.items.length,1);assert.equal(nurses.items[0].nursingSummary.nightShift,'Yes');assert.equal(nurses.items[0].nursingSummary.description,'Experienced ICU nurse');assert.ok(!JSON.stringify(nurses).includes('PRIVATE-NURSE-123'));
+      const lockedNurse=await request('C','institution/candidates/'+nurse.id+'/details');assert.equal(lockedNurse.nursingDetails,undefined);assert.ok(!JSON.stringify(lockedNurse).includes('PRIVATE-NURSE-123'));
+      const nurseJob=await request('C','institution/jobs','POST',{profession:'NURSE',title:'ICU nurse',subject:'Nursing',location:'Test origin',salary:25000,description:'Nurse required for ICU and night shift.',closesAt:new Date(Date.now()+86400000).toISOString()},201);
+      assert.ok((await request('nurse','jobs')).every((j:any)=>j.profession==='NURSE'));
+      await request('teacher','jobs/'+nurseJob.id+'/apply','POST',{contactConsent:true},403);
+      await request('pharma1','jobs/'+nurseJob.id+'/apply','POST',{contactConsent:true},403);
+      const institutionDirectory=await request('owner','admin/institutions');assert.ok(institutionDirectory.tenants.some((t:any)=>t.id===a.id));assert.ok(institutionDirectory.tenants.every((t:any)=>'contactPerson' in t&&'officialEmail' in t));await request('teacher','admin/institutions','GET',undefined,403);
+      await request('owner','admin/tenants/'+(await request('C','institution/account')).tenant.id,'PATCH',{verified:true});
+      // Independent profession pack prices, grants, balances and unlock debits.
+      const teacherBefore=await request('owner','commerce/config');
+      for(const profession of ['PHARMACIST','NURSE'])await request('owner','admin/settings/credit_pricing:'+profession,'PATCH',{value:{enabled:true,unlockPaid:true,packPrice:profession==='NURSE'?30000:25000,packCredits:profession==='NURSE'?4:3,validityDays:180}});
+      assert.equal((await request('owner','commerce/config')).packPrice,teacherBefore.packPrice);
+      await request('A','commerce/orders','POST',{kind:'UNLOCK_PACK',profession:'NURSE'},403);
+      const teacherCreditsBefore=(await request('C','institution/account')).credits;
+      for(const profession of ['PHARMACIST','NURSE']){
+        if(profession==='NURSE')await request('C','institution/candidates/'+nurse.id+'/unlock','POST',{},403);
+        const order=await request('C','commerce/orders','POST',{kind:'UNLOCK_PACK',profession},201);assert.equal(order.snapshot.profession,profession);assert.equal(order.amount,profession==='NURSE'?30000:25000);
+        await request('C','commerce/orders/'+order.id+'/submit','POST',{utr:'TEST-'+profession+'-CREDIT',amount:order.amount},201);
+        await request('owner','admin/commerce/'+order.id+'/decision','POST',{approve:true,receivedAmount:order.amount,receiptReference:'TEST-'+profession+'-CREDIT',reason:'Integration profession pack'},201);
+      }
+      let professionAccount=await request('C','institution/account');const balances=(a:any)=>Object.fromEntries(a.professionBalances.map((g:any)=>[g.profession,g._sum.remaining]));assert.equal(balances(professionAccount).PHARMACIST,3);assert.equal(balances(professionAccount).NURSE,4);assert.equal(professionAccount.credits,teacherCreditsBefore);
+      await request('C','institution/candidates/'+pharma1.id+'/unlock','POST',{},201);
+      professionAccount=await request('C','institution/account');assert.equal(balances(professionAccount).PHARMACIST,2);assert.equal(balances(professionAccount).NURSE,4);
+      await request('C','institution/candidates/'+nurse.id+'/unlock','POST',{},201);
+      professionAccount=await request('C','institution/account');assert.equal(balances(professionAccount).NURSE,3);assert.equal(balances(professionAccount).PHARMACIST,2);assert.equal(professionAccount.credits,teacherCreditsBefore);
+      assert.ok(professionAccount.invoices.length>=2);
+      await request('C','institution/candidates/'+nurse.id+'/unlock','POST',{},201);assert.equal(balances(await request('C','institution/account')).NURSE,3);
+      const nurseReport=await request('C','institution/candidates/'+nurse.id+'/unavailable-report','POST',{reason:'Test nurse unavailable after contact'},201);
+      await request('owner','admin/unavailable-reports/'+nurseReport.id+'/decision','POST',{restoreCredit:true,markUnavailable:false,reason:'Test nursing replacement',validityDays:30},201);
+      professionAccount=await request('C','institution/account');assert.equal(balances(professionAccount).NURSE,4);assert.equal(balances(professionAccount).PHARMACIST,2);
+      const edits=[['A',job],['C',pharmacyJob],['C',nurseJob]] as const;
+      for(const [who,j] of edits){const beforeApplications=await db.application.count({where:{jobId:j.id}}),beforeOrders=await db.commerceOrder.count({where:{kind:'JOB'}});const edit={title:j.title+' updated',subject:j.subject,location:j.location,salary:2000,salaryMax:30000,description:j.description+' Updated requirements.',closesAt:new Date(Date.now()+30*86400000).toISOString()};const edited=await request(who,'institution/jobs/'+j.id,'PATCH',edit);assert.equal(edited.salary,2000);assert.equal(edited.salaryMax,30000);assert.equal(edited.profession,j.profession);assert.equal(await db.application.count({where:{jobId:j.id}}),beforeApplications);assert.equal(await db.commerceOrder.count({where:{kind:'JOB'}}),beforeOrders);await request('B','institution/jobs/'+j.id,'PATCH',edit,404);await request('teacher','institution/jobs/'+j.id,'PATCH',edit,403);await request(who,'institution/jobs/'+j.id,'PATCH',{...edit,salaryMax:1000},400);await request(who,'institution/jobs/'+j.id,'PATCH',{...edit,profession:'NURSE'},400);await request(who,'institution/jobs/'+j.id,'PATCH',{...edit,closesAt:new Date(0).toISOString()},400);}
+      await request('C','institution/jobs/'+nurseJob.id+'/close','PATCH',{});await request('C','institution/jobs/'+nurseJob.id,'PATCH',{title:'Closed test',subject:'Nursing',location:'Test',salary:1000,salaryMax:2000,description:'Closed vacancy cannot be edited.',closesAt:new Date(Date.now()+86400000).toISOString()},400);
+      // General is independent of legacy Teacher, Pharmacy and Nursing.
+      const generalCfg=await request('owner','public/general-config');assert.ok(generalCfg.categories.some((v:any)=>v.id==='teaching'));
+      await request('teacher','admin/general-config','PATCH',generalCfg,403);
+      await request('owner','admin/general-config','PATCH',{...generalCfg,profileFee:0,applicationFee:0,jobFee:0});
+      await request('generalEmployer','auth/register','POST',{email:'general-employer@example.com',password:pass,name:'General Owner',role:'TENANT_ADMIN',institution:'General Employer',recruitingProfessions:['GENERAL'],generalCategories:['teaching','banking']},201);
+      const ge=(await request('generalEmployer','institution/account')).tenant;await request('owner','admin/tenants/'+ge.id,'PATCH',{verified:true});
+      await request('general1','auth/register','POST',{email:'general1@example.com',password:pass,name:'General Candidate',role:'CANDIDATE',profession:'GENERAL'},201);
+      const generalFields={...fields,preferredLocations:['Unlisted village','Another custom town'],preferredPlaceIds:['test-origin'],directoryVisible:true,directoryConsent:true,subject:'Commerce',qualification:'B.Com',jobInterests:['teaching','banking'],personalDetails:{firstName:'Test',lastName:'General',currentJobRole:'Accountant',employmentStatus:'Currently working'},generalDetails:{description:'General accounts and teaching interest',categoryDetails:{'teaching:Subjects':'Commerce'}},education:[{degree:'B.Com',institution:'Test College',year:2024,resultType:'Percentage',result:'75',highest:false},{degree:'M.Com',institution:'Test University',year:2025,resultType:'Percentage',result:'68',highest:true}]};
+      await request('general1','profile','PATCH',generalFields);let g1=await request('general1','profile');assert.deepEqual(new Set(g1.preferredLocations),new Set(['Unlisted village','Another custom town','Test origin']));assert.equal(g1.profession,'GENERAL');assert.match(g1.displayId,/^GN/);await request('owner','admin/candidates/'+g1.id,'PATCH',{profileReviewed:true,revision:g1.revision});
+      const gj=await request('generalEmployer','institution/jobs','POST',{profession:'GENERAL',category:'teaching',requirements:{acceptedDegrees:['B.Com','B.Sc'],requiredDegrees:['B.Ed'],anyGraduate:false,minExperience:0,categoryDetails:{Subjects:'Commerce'}},title:'General Commerce Teacher',subject:'Commerce',location:'Bijapur',salary:20000,salaryMax:30000,description:'Teach commerce with a supportive school team.',closesAt:new Date(Date.now()+86400000).toISOString()},201);
+      let generalJobs=await request('general1','jobs');assert.ok(generalJobs.every((j:any)=>j.profession==='GENERAL'));assert.equal(generalJobs.find((j:any)=>j.id===gj.id).eligibility.eligible,false);await request('general1','jobs/'+gj.id+'/apply','POST',{contactConsent:true},403);
+      await request('general1','profile','PATCH',{...generalFields,education:[...generalFields.education,{degree:'B.Ed',institution:'Education College',year:2025,resultType:'Percentage',result:'70',highest:false}]});g1=await request('general1','profile');await request('owner','admin/candidates/'+g1.id,'PATCH',{profileReviewed:true,revision:g1.revision});
+      generalJobs=await request('general1','jobs');assert.equal(generalJobs.find((j:any)=>j.id===gj.id).eligibility.eligible,true);await request('general1','jobs/'+gj.id+'/apply','POST',{contactConsent:true},201);
+      await request('teacher','jobs/'+gj.id+'/apply','POST',{contactConsent:true},403);assert.ok(!(await request('teacher','jobs')).some((j:any)=>j.id===gj.id));
+      const mcomSearch=await request('generalEmployer','institution/candidates?profession=GENERAL&degree=M.Com');assert.ok(mcomSearch.items.some((c:any)=>c.id===g1.id));assert.equal(mcomSearch.items.find((c:any)=>c.id===g1.id).educationResult,'68');
+      const currentRoleSearch=await request('generalEmployer','institution/candidates?profession=GENERAL&q=accountant');assert.ok(currentRoleSearch.items.some((c:any)=>c.id===g1.id));assert.equal(currentRoleSearch.items.find((c:any)=>c.id===g1.id).generalSummary.currentJobRole,'Accountant');
+      await db.candidate.update({where:{id:g1.id},data:{profileReviewed:false}});assert.ok(!(await request('generalEmployer','institution/candidates?profession=GENERAL')).items.some((c:any)=>c.id===g1.id));await db.candidate.update({where:{id:g1.id},data:{profileReviewed:true}});
+      const generalSearch=await request('generalEmployer','institution/candidates?profession=GENERAL&degree=B.Ed&subject=Commerce&category=teaching');assert.equal(generalSearch.items[0].id,g1.id);assert.ok(generalSearch.items[0].preferredLocations.includes('Unlisted village'));assert.ok(generalSearch.items[0].preferredLocations.includes('Test origin'));await request('A','institution/candidates/'+g1.id+'/details','GET',undefined,403);
+      assert.equal((await request('generalEmployer','institution/candidates?profession=GENERAL&degree=M.Sc')).items.length,0);
+      const generalPack=await request('generalEmployer','commerce/orders','POST',{kind:'UNLOCK_PACK',profession:'GENERAL'},201);assert.equal(generalPack.snapshot.profession,'GENERAL');await request('generalEmployer','commerce/orders/'+generalPack.id+'/submit','POST',{utr:'GENERAL-PACK-TEST',amount:generalPack.amount},201);await request('owner','admin/commerce/'+generalPack.id+'/decision','POST',{approve:true,receivedAmount:generalPack.amount,receiptReference:'GENERAL-PACK-TEST',reason:'General pack test'},201);
+      await request('generalEmployer','institution/candidates/'+g1.id+'/unlock','POST',{},201);assert.equal((await request('generalEmployer','institution/account')).credits,0);
+      await request('owner','admin/general-config','PATCH',{...generalCfg,categories:generalCfg.categories.map((c:any)=>c.id==='teaching'?{...c,active:false}:c)});
+      await request('generalEmployer','institution/jobs','POST',{profession:'GENERAL',category:'teaching',requirements:{},title:'Inactive category vacancy',subject:'Math',location:'Test',salary:1000,description:'Inactive category should reject this new job.',closesAt:new Date(Date.now()+86400000).toISOString()},400);
+      await request('owner','admin/general-config','PATCH',generalCfg);
+      // Owner cash payments allocate atomically into matching profession balances.
+      const cashDate=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+      await db.tenant.update({where:{id:ge.id},data:{recruitingProfessions:['GENERAL','TEACHER','PHARMACIST','NURSE']}});
+      const cashConfig=await request('owner','commerce/config');
+      const cashPayload=(profession:string,reference:string,mode='CASH')=>{const c=cashConfig.professionPricing[profession];return {tenantId:ge.id,profession,mode,quantity:2,receiptReference:reference,paymentDate:cashDate,note:mode==='COMPLIMENTARY'?'Goodwill adjustment':'Cash received at office',expectedPackPrice:c.packPrice,expectedPackCredits:c.packCredits,expectedValidityDays:c.validityDays}};
+      await request('generalEmployer','admin/cash-credits','POST',cashPayload('GENERAL','DENIED-CASH'),403);
+      await request('teacher','admin/cash-credits','POST',cashPayload('GENERAL','DENIED-TEACHER'),403);
+      await request('owner','admin/cash-credits','POST',{...cashPayload('GENERAL','STALE-CASH'),expectedPackPrice:1},400);
+      for(const profession of ['GENERAL','TEACHER','PHARMACIST','NURSE']){
+        const before=await db.creditGrant.aggregate({where:{tenantId:ge.id,profession},_sum:{remaining:true}});
+        const result=await request('owner','admin/cash-credits','POST',cashPayload(profession,'CASH-'+profession),201);
+        assert.equal(result.order.amount,cashConfig.professionPricing[profession].packPrice*2);assert.equal(result.order.snapshot.paymentMethod,'CASH');assert.ok(result.invoice.id);assert.equal(result.credits,cashConfig.professionPricing[profession].packCredits*2);
+        const after=await db.creditGrant.aggregate({where:{tenantId:ge.id,profession},_sum:{remaining:true}});assert.equal(after._sum.remaining,(before._sum.remaining||0)+result.credits);
+        await request('owner','admin/cash-credits','POST',cashPayload(profession,'cash-'+profession.toLowerCase()),400);
+      }
+      const comp=await request('owner','admin/cash-credits','POST',cashPayload('NURSE','GOODWILL-001','COMPLIMENTARY'),201);assert.equal(comp.order.amount,0);assert.equal(comp.invoice,null);assert.equal(comp.order.snapshot.paymentMethod,'COMPLIMENTARY');
+      await request('owner','admin/cash-credits','POST',cashPayload('GENERAL','GOODWILL-001'),400);
+      await request('owner','admin/cash-credits','POST',{...cashPayload('GENERAL','FUTURE-CASH'),paymentDate:'2099-01-01'},400);
+      await db.tenant.update({where:{id:ge.id},data:{blocked:true}});await request('owner','admin/cash-credits','POST',cashPayload('GENERAL','BLOCKED-CASH'),400);await db.tenant.update({where:{id:ge.id},data:{blocked:false,recruitingProfessions:['GENERAL']}});
+      await request('owner','admin/cash-credits','POST',cashPayload('NURSE','WRONG-PROF'),400);
+      const race=await Promise.allSettled([request('owner','admin/cash-credits','POST',cashPayload('GENERAL','RACE-CASH'),201),request('owner','admin/cash-credits','POST',cashPayload('GENERAL','RACE-CASH'),201)]);assert.equal(race.filter(r=>r.status==='fulfilled').length,1);assert.equal(await db.commerceOrder.count({where:{receiptKey:'CASH:RACE-CASH'}}),1);
+      const cashInvoice=await db.invoice.findFirstOrThrow({where:{tenantId:ge.id,number:{startsWith:'TC-CASH-'}}});
+      const pdf=await fetch('http://127.0.0.1:3003/api/institution/invoices/'+cashInvoice.id+'/pdf',{headers:{Cookie:clients.generalEmployer.cookie}});assert.equal(pdf.status,200);assert.match(pdf.headers.get('content-type')||'',/application\/pdf/);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,4).toString(),'%PDF');
+      const deniedReceipt=await fetch('http://127.0.0.1:3003/api/institution/invoices/'+cashInvoice.id+'/pdf',{headers:{Cookie:clients.A.cookie}});assert.equal(deniedReceipt.status,404);
+      await assert.rejects(()=>db.commerceOrder.create({data:{userId:(comp.order as any).userId,tenantId:ge.id,kind:'UNLOCK_PACK',snapshot:{},subtotal:0,amount:0,payeeSnapshot:{},status:'APPROVED'}}));
+      const cashHistory=await request('generalEmployer','commerce/orders');assert.ok(cashHistory.some((o:any)=>o.snapshot.paymentMethod==='CASH'));assert.ok(cashHistory.some((o:any)=>o.snapshot.paymentMethod==='COMPLIMENTARY'));assert.ok(await db.audit.count({where:{action:'CASH_PAYMENT_CREDITS_ADDED',tenantId:ge.id}})>=4);
+      const settingsView=await request('owner','admin/settings-view');assert.ok(Array.isArray(settingsView.settings));assert.equal(settingsView.tenants,undefined);assert.equal(settingsView.payments,undefined);assert.equal(settingsView.settings.find((s:any)=>s.key==='general_auto_approve_enabled').value,(await request('owner','admin/overview')).settings.find((s:any)=>s.key==='general_auto_approve_enabled').value);
+      const paymentsView=await request('owner','admin/payments-view');assert.ok(Array.isArray(paymentsView.payments));assert.ok(Array.isArray(paymentsView.tenants));assert.equal(paymentsView.settings,undefined);
+      await request('teacher','admin/settings-view','GET',undefined,403);await request('A','admin/payments-view','GET',undefined,403);
+      await new Promise(r=>setTimeout(r,61000));
+      // Missing configuration after a clean reset uses credit-pack defaults, not a Starter plan.
+      const savedPricing=await db.setting.findUnique({where:{key:'simple_pricing'}});await db.setting.deleteMany({where:{key:'simple_pricing'}});await db.plan.deleteMany({where:{id:'free'}});
+      for(const profession of ['GENERAL','PHARMACIST','NURSE','TEACHER']){
+        await request('resetEmployer'+profession,'auth/register','POST',{email:'reset-employer-'+profession.toLowerCase()+'@example.invalid',password:pass,name:'Reset Employer Test',role:'TENANT_ADMIN',institution:'Reset '+profession+' Employer',recruitingProfessions:[profession],...(profession==='GENERAL'?{generalCategories:['retail']}:{})},201);
+        const resetAccount=await request('resetEmployer'+profession,'institution/account');assert.equal(resetAccount.credits,0);assert.equal(await db.creditGrant.count({where:{tenantId:resetAccount.tenant.id}}),0);assert.equal(await db.subscription.count({where:{tenantId:resetAccount.tenant.id}}),0);
+        assert.equal((await request('resetEmployer'+profession,'commerce/config')).enabled,true);
+      }
+      if(savedPricing)await db.setting.create({data:{key:'simple_pricing',value:savedPricing.value!}});
+      // Approval checks share the fresh test rate-limit window.
+      // Auto approval is independent, applies only to saved active profiles and preserves consent.
+      for(const key of ['teacher_auto_approve_enabled','pharmacist_auto_approve_enabled','nurse_auto_approve_enabled','general_auto_approve_enabled'])await request('owner','admin/settings/'+key,'PATCH',{value:false});
+      const approvals:any={};
+      for(const profession of ['TEACHER','GENERAL','PHARMACIST','NURSE']){const user=await db.user.create({data:{email:'approval-'+profession.toLowerCase()+'@example.invalid',password:'disabled-test',role:'CANDIDATE',name:'Approval Test'}});const candidate=await db.candidate.create({data:{userId:user.id,displayId:'APPROVAL-'+profession,profession,subject:'Test role',qualification:'B.Com',location:'Test',directoryVisible:true,directoryConsent:false,profileReviewed:false}});await db.setting.create({data:{key:'profile-activation:'+user.id,value:true}});approvals[profession]=candidate;}
+      const unsavedUser=await db.user.create({data:{email:'approval-unsaved@example.invalid',password:'disabled-test',role:'CANDIDATE',name:'Unsaved Test'}});const unsaved=await db.candidate.create({data:{userId:unsavedUser.id,displayId:'APPROVAL-UNSAVED',profession:'GENERAL',subject:'Not specified',qualification:'Not specified',location:'Not specified',profileReviewed:false}});
+      await request('owner','admin/settings/teacher_auto_approve_enabled','PATCH',{value:true});assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals.TEACHER.id}})).profileReviewed,true);for(const p of ['GENERAL','PHARMACIST','NURSE'])assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals[p].id}})).profileReviewed,false);
+      await db.candidate.update({where:{id:pharma1.id},data:{profileReviewed:false}});await request('pharma1','profile','PATCH',pharmacyFields);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:pharma1.id}})).profileReviewed,false);
+      await request('owner','admin/settings/pharmacist_auto_approve_enabled','PATCH',{value:true});assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals.PHARMACIST.id}})).profileReviewed,true);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals.NURSE.id}})).profileReviewed,false);
+      await db.candidate.update({where:{id:pharma1.id},data:{profileReviewed:false}});await request('pharma1','profile','PATCH',pharmacyFields);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:pharma1.id}})).profileReviewed,true);
+      await request('owner','admin/settings/nurse_auto_approve_enabled','PATCH',{value:true});await db.candidate.update({where:{id:nurse.id},data:{profileReviewed:false}});await request('nurse','profile','PATCH',nurseFields);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:nurse.id}})).profileReviewed,true);
+      await request('owner','admin/settings/general_auto_approve_enabled','PATCH',{value:true});assert.equal((await request('owner','public/general-config')).approvalRequired,false);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals.GENERAL.id}})).profileReviewed,true);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:unsaved.id}})).profileReviewed,false);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals.GENERAL.id}})).directoryConsent,false);
+      assert.equal((await request('owner','admin/overview')).settings.find((s:any)=>s.key==='general_auto_approve_enabled').value,true);
+      await request('owner','admin/general-config','PATCH',{...generalCfg,approvalRequired:true});assert.equal((await request('owner','admin/overview')).settings.find((s:any)=>s.key==='general_auto_approve_enabled').value,false);assert.equal((await db.candidate.findUniqueOrThrow({where:{id:approvals.GENERAL.id}})).profileReviewed,true);
+      await db.setting.create({data:{key:'profile-activation:'+unsavedUser.id,value:true}});await request('owner','admin/general-config','PATCH',{...generalCfg,approvalRequired:false});assert.equal((await db.candidate.findUniqueOrThrow({where:{id:unsaved.id}})).profileReviewed,true);
+      await request('generalEmployer','admin/settings/general_auto_approve_enabled','PATCH',{value:true},403);
+      for(const key of ['teacher_auto_approve_enabled','pharmacist_auto_approve_enabled','nurse_auto_approve_enabled'])await request('owner','admin/settings/'+key,'PATCH',{value:false});await request('owner','admin/general-config','PATCH',generalCfg);
       // Verify CSRF and role checks explicitly.
       const r = await fetch("http://127.0.0.1:3003/api/admin/tenants/" + a.id, {
         method: "PATCH",
@@ -933,3 +1055,4 @@ test(
     }
   },
 );
+

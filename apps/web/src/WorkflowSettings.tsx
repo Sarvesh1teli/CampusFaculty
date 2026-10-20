@@ -2,6 +2,9 @@ import { useState } from "react";
 import { Button } from "./components/ui/button";
 const groups = [
  {title:"Teacher approval",description:"Approve once. Later profile edits retain approval.",items:[["teacher_auto_approve_enabled","Auto-approve teacher profiles","Approve saved new and pending profiles automatically. Turning off requires manual approval for future profiles."]]},
+ {title:"General Jobs approval",description:"Synced with Require profile review in General Jobs Settings.",items:[["general_auto_approve_enabled","Auto-approve General Jobs profiles","Approve saved General profiles automatically. Does not change contact privacy or fees."]]},
+ {title:"Pharmacy approval",description:"Independent approval for pharmacist profiles.",items:[["pharmacist_auto_approve_enabled","Auto-approve pharmacist profiles","Approve saved Pharmacy profiles automatically. Registration remains self-declared."]]},
+ {title:"Nursing approval",description:"Independent approval for nurse profiles.",items:[["nurse_auto_approve_enabled","Auto-approve nurse profiles","Approve saved Nursing profiles automatically. Registration remains self-declared."]]},
   {
     title: "Option 1 · Job-driven",
     description: "Institutions post vacancies. Teachers find jobs and apply.",
@@ -66,17 +69,17 @@ export function WorkflowSettings({
       "candidate_job_applications_enabled",
     ].every((k) => settings.find((s: any) => s.key === k)?.value === false);
   return (
-    <div className="settings-layout">
+    <div className={"settings-layout"+(tab==="Profile Approval"?" approval-settings-layout":"")}>
       <div className="settings-tabs" role="tablist" aria-label="Settings sections">{["Recruitment","Profile Approval","Payments","Policies"].map(v=><button type="button" role="tab" aria-selected={tab===v} className={tab===v?"active":""} key={v} onClick={()=>setTab(v)}>{v}</button>)}</div>
-      <div role="tabpanel" aria-label={tab}><section className="settings-intro">
+      <div role="tabpanel" aria-label={tab}>{tab!=="Profile Approval"&&<section className="settings-intro">
         <h2>{tab=== "Recruitment"?"Recruitment workflows":tab}</h2>
-        <p>Choose how teachers and institutions connect.</p>
+        <p>Choose how job seekers and employers connect.</p>
         <span className="settings-mode">
           {option2 ? "Search-driven only" : "Custom workflow settings"}
         </span>
-      </section>
+      </section>}
       <div className="workflow-grid">
-        {groups.filter(g=>tab==="Recruitment"?g.title!=="Teacher approval":tab==="Profile Approval"?g.title==="Teacher approval":false).map((g) => (
+        {groups.filter(g=>tab==="Recruitment"?!g.title.endsWith("approval"):tab==="Profile Approval"?g.title.endsWith("approval"):false).map((g) => (
           <section className="workflow-card" key={g.title}>
             <div className="workflow-heading">
               <h3>{g.title}</h3>

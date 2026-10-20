@@ -1,3 +1,5 @@
+import {FeedbackDialog} from "./FeedbackDialog";
+import {useGeneral,GeneralPreferences} from "./GeneralJobs";
 import {PlacePicker,PreferredPlaces} from "./PlacePicker";
 import { useState } from "react";
 import { Plus, X, ShieldCheck } from "lucide-react";
@@ -64,27 +66,37 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
   const [p, setP] = useState({
       ...data,
       ...(data.profession==="PHARMACIST"?{pharmacyDetails:{registered:"Pending",council:"",registrationNumber:"",workType:"Both",expectedPay:null,...data.pharmacyDetails},subject:data.subject==="Not specified"?"Pharmacist":data.subject}:{}),
+      ...(data.profession==="NURSE"?{nursingDetails:{registered:"Pending",council:"",registrationNumber:"",workType:"Both",nightShift:"Open to discussion",department:"",expectedPay:null,...data.nursingDetails},subject:data.subject==="Not specified"?"Nurse":data.subject}:{}),
       personalDetails: data.personalDetails?.firstName
         ? data.personalDetails
         : { firstName: "", middleName: "", lastName: "" },
     }),
     [challenge, setChallenge] = useState(""),
     [code, setCode] = useState("");
-  const pharmacy=data.profession==="PHARMACIST";
+  const general=data.profession==="GENERAL";
+  const generalCfg=useGeneral(api);
+  const nursing=data.profession==="NURSE";
+  const pharmacy=nursing||data.profession==="PHARMACIST";
+  const detailsKey=nursing?"nursingDetails":"pharmacyDetails";
   const [section, setSection] = useState("Personal");
   const change = (key: string, value: any) => {const next={...p,[key]:value};setP(next);onDraftChange?.(next);};
   const [consentPrompt,setConsentPrompt]=useState(false);
+  const [profileMessage,setProfileMessage]=useState("");
+  const fresher=p.personalDetails.employmentStatus==="Fresher";
+  const roleGuide="This field helps employers understand what work you can do. Freshers: enter your preferred role or subject, such as Accounts Assistant, Sales Executive or Mathematics. Keep experience at 0 years and 0 months; no work history is needed. Experienced candidates: enter your current or previous role or subject and total work experience. Add work history if available without naming your employer.";
+  function employmentStatus(value:string){const next={...p,personalDetails:{...p.personalDetails,employmentStatus:value,...(value==="Fresher"?{experienceMonths:0}:{})},...(value==="Fresher"?{experience:0}:{})};setP(next);onDraftChange?.(next);}
+
   const [validationErrors,setValidationErrors]=useState<string[]>([]);
   function validateProfile(){
     const errors:{section:string,message:string}[]=[];
     const required=(value:any,label:string,section:string)=>{if(!String(value??"").trim()||value==="Not specified")errors.push({section,message:label+" is required."});};
     required(p.location,"Current location","Personal");
-    required(p.subject,pharmacy?"Role / area":"Primary teaching subject","Experience");
+    required(p.subject,general?"Job role / subject of interest":pharmacy?"Role / area":"Primary teaching subject","Experience");
     p.education.forEach((e:any,i:number)=>{const label=e.degree||"Education entry "+(i+1);required(e.degree,"Qualification for education entry "+(i+1),"Qualifications");required(e.institution,label+" school / college / university","Qualifications");if(!Number.isInteger(e.year)||e.year<1950||e.year>2100)errors.push({section:"Qualifications",message:label+" needs a valid passing year (1950–2100)."});});
     p.experienceEntries.forEach((e:any,i:number)=>{required(e.role,"Role for experience entry "+(i+1),"Experience");required(e.subject,"Subject for experience entry "+(i+1),"Experience");});
     if(p.personalDetails.aadhaar&&!/^\d{12}$/.test(p.personalDetails.aadhaar))errors.push({section:"Personal",message:"Aadhaar must contain 12 digits, or leave it blank."});
     setValidationErrors(errors.map(e=>e.message));
-    if(errors.length){setSection(errors[0].section);return false;}return true;
+    if(errors.length){setSection(errors[0].section);setProfileMessage(errors.map(e=>e.message).join(" ")+(errors.some(e=>e.message.includes("role")||e.message.includes("subject"))?" Freshers can enter their preferred job role or subject. ":""));return false;}return true;
   }
   function addSchoolEducation(degree:string){change("education",[...p.education,{degree,institution:"",stream:"",year:new Date().getFullYear(),resultType:"Percentage",result:"",highest:false}]);}
   function persist(allow:boolean){if(!validateProfile()){setConsentPrompt(false);return;}const next={...p,experience:Number(p.experience)||0,directoryVisible:allow,directoryConsent:allow};setP(next);setConsentPrompt(false);save({...next,qualification:(p.education.find((e:any)=>e.highest)?.degree||p.education[0]?.degree||p.qualification||"Not specified"),personalDetails:p.personalDetails.firstName?{...p.personalDetails,experienceMonths:Number(p.personalDetails.experienceMonths)||0}:undefined,skills:p.skills.filter(Boolean),subjects:p.subjects.filter(Boolean),preferredLocations:p.preferredLocations.filter(Boolean)});}
@@ -109,7 +121,7 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
               field === "degree" ? (
                 <DegreeField
                   key={field}
-                  choices={pharmacy?["D.Pharm","B.Pharm","M.Pharm","Pharm.D"]:degrees}
+                  choices={general?(generalCfg?.qualifications||degrees):nursing?["ANM","GNM / Diploma Nursing","B.Sc Nursing","Post Basic B.Sc Nursing","M.Sc Nursing"]:pharmacy?["D.Pharm","B.Pharm","M.Pharm","Pharm.D"]:degrees}
                   label="Degree"
                   value={entry[field]}
                   onChange={(value: string) =>
@@ -147,11 +159,12 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
                   {field === "result"
                     ? "Percentage / grade"
                     : field === "institution"
-                      ? "University / institution"
-                      : field.charAt(0).toUpperCase() + field.slice(1)}
+                      ? (/SSLC|10th|SSC/i.test(entry.degree||"")?"School / board":"University / institution")
+                      : field === "stream" ? (/SSLC|10th|SSC/i.test(entry.degree||"")?"Medium of instruction":"Stream / specialization") : field.charAt(0).toUpperCase() + field.slice(1)}
                   <input
                     required
                     type={["year", "years"].includes(field) ? "number" : "text"}
+                    placeholder={field==="stream"?(/SSLC|10th|SSC/i.test(entry.degree||"")?"e.g. Kannada medium, English medium":"e.g. Commerce, Science, Computer Science"):undefined}
                     value={entry[field] || ""}
                     onChange={(e) =>
                       change(
@@ -219,7 +232,8 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
   }
   return (
     <>
-      {consentPrompt&&<div className="modal-backdrop"><section className="card modal consent-save-dialog" role="dialog" aria-modal="true" aria-labelledby="save-consent-title"><h2 id="save-consent-title">{pharmacy?"Allow employers to discover you?":"Allow schools to discover you?"}</h2><p>{pharmacy?"Your anonymous profile can be visible to verified employers recruiting your profession.":"Your anonymous teaching profile can be visible to all verified schools and colleges."} They can access your name, mobile and email only after an authorized contact unlock.</p><p>You can withdraw this permission anytime under Privacy. Initial profile approval and active status still apply.</p><div className="card-actions"><Button type="button" disabled={busy} onClick={()=>persist(true)}>Allow all verified institutions & save</Button><Button type="button" variant="outline" disabled={busy} onClick={()=>persist(false)}>Keep directory private & save</Button><Button type="button" variant="ghost" onClick={()=>setConsentPrompt(false)}>Cancel</Button></div></section></div>}
+      {profileMessage&&<FeedbackDialog title="Profile guidance" message={profileMessage} onClose={()=>setProfileMessage("")}/>}
+      {consentPrompt&&<div className="modal-backdrop"><section className="card modal consent-save-dialog" role="dialog" aria-modal="true" aria-labelledby="save-consent-title"><h2 id="save-consent-title">{(pharmacy||general)?"Allow employers to discover you?":"Allow schools to discover you?"}</h2><p>{(pharmacy||general)?"Your anonymous profile can be visible to verified employers recruiting your profession.":"Your anonymous teaching profile can be visible to all verified schools and colleges."} They can access your name, mobile and email only after an authorized contact unlock.</p><p>You can withdraw this permission anytime under Privacy. Initial profile approval and active status still apply.</p><div className="card-actions"><Button type="button" disabled={busy} onClick={()=>persist(true)}>Allow all verified institutions & save</Button><Button type="button" variant="outline" disabled={busy} onClick={()=>persist(false)}>Keep directory private & save</Button><Button type="button" variant="ghost" onClick={()=>setConsentPrompt(false)}>Cancel</Button></div></section></div>}
       <form
         className="card profile-form" noValidate
         onSubmit={(e) => {
@@ -230,11 +244,13 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
         {validationErrors.length>0&&<div className="alert error" role="alert"><strong>Please complete these fields:</strong><ul>{validationErrors.map(message=><li key={message}>{message}</li>)}</ul></div>}
         <div className="flex-between">
           <div>
-            <h2>{pharmacy?"Your pharmacist profile":"Your teaching profile"}</h2>
+            <h2>{general?"Your General Jobs profile":nursing?"Your nurse profile":pharmacy?"Your pharmacist profile":"Your teaching profile"}</h2>
             <p>{data.displayId}</p>
           </div>
           <span className="badge">{completion}% complete</span>
         </div>
+        <p className="muted" role="note">Continue moves to the next section. To save all details, open Privacy and select Save profile, then confirm your contact privacy choice.</p>
+        {data.profileReviewed===false&&<p className="alert warning" role="status">Awaiting Owner review: saved profile details will appear in employer searches after approval, provided your profile is active, you are seeking work and directory visibility is enabled.</p>}
         <div className="progress">
           <span style={{ width: completion + "%" }} />
         </div>
@@ -279,7 +295,7 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
                 <label>Date of birth<input type="date" max={new Date().toISOString().slice(0,10)} value={p.personalDetails.dateOfBirth||""} onChange={e=>change("personalDetails",{...p.personalDetails,dateOfBirth:e.target.value})}/></label>
                 <label>Aadhaar (optional)<input value={p.personalDetails.aadhaar||""} inputMode="numeric" pattern="[0-9]{12}" maxLength={12} placeholder="12-digit number" autoComplete="off" onChange={e=>change("personalDetails",{...p.personalDetails,aadhaar:e.target.value.replace(/\D/g,"").slice(0,12)})}/></label>
                 <label>Mobile number<input type="tel" value={p.mobile||""} onChange={e=>change("mobile",e.target.value)}/></label>
-                {pharmacy?<PlacePicker api={api} label="Current location" value={p.currentPlaceId} initialText={p.location==="Not specified"?"":p.location} onChange={(id:string|null,text:string)=>{const next={...p,currentPlaceId:id,location:text};setP(next);onDraftChange?.(next)}}/>:<label>Current location<input required value={p.location||""} onChange={e=>change("location",e.target.value)}/></label>}
+                {(pharmacy||general)?<PlacePicker api={api} label="Current location" value={p.currentPlaceId} initialText={p.location==="Not specified"?"":p.location} onChange={(id:string|null,text:string)=>{const next={...p,currentPlaceId:id,location:text};setP(next);onDraftChange?.(next)}}/>:<label>Current location<input required value={p.location||""} onChange={e=>change("location",e.target.value)}/></label>}
                 <label className="profile-address-field">Address (optional)<input value={p.personalDetails.address||""} maxLength={300} placeholder="Street / area, district, state, PIN" autoComplete="street-address" onChange={e=>change("personalDetails",{...p.personalDetails,address:e.target.value})}/></label>
               </div>
             </>
@@ -301,13 +317,16 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
           )}
           {section === "Experience" && (
             <>
-              {!pharmacy&&<>              <div className="form-grid"><label>Employment status<select aria-label="Employment status" value={p.personalDetails.employmentStatus||""} onChange={e=>change("personalDetails",{...p.personalDetails,employmentStatus:e.target.value})}><option value="">Select employment status</option>{["Fresher","Previously worked","Currently working"].map(v=><option key={v}>{v}</option>)}</select></label><label>Teaching medium<select aria-label="Teaching medium" value={p.personalDetails.teachingMedium||""} onChange={e=>change("personalDetails",{...p.personalDetails,teachingMedium:e.target.value})}><option value="">Select teaching medium</option>{["English","Kannada","Hindi","Marathi","Tamil","Telugu","Malayalam","Urdu","Other"].map(v=><option key={v}>{v}</option>)}</select></label>{p.personalDetails.teachingMedium==="Other"&&<label>Other teaching medium<input maxLength={100} value={p.personalDetails.otherTeachingMedium||""} onChange={e=>change("personalDetails",{...p.personalDetails,otherTeachingMedium:e.target.value})}/></label>}</div>
+              {(!general||(p.jobInterests||[]).includes("teaching"))&&!pharmacy&&<>              <div className="form-grid"><label>Employment status<select aria-label="Employment status" value={p.personalDetails.employmentStatus||""} onChange={e=>employmentStatus(e.target.value)}><option value="">Select employment status</option>{["Fresher","Previously worked","Currently working"].map(v=><option key={v}>{v}</option>)}</select></label><label>Teaching medium<select aria-label="Teaching medium" value={p.personalDetails.teachingMedium||""} onChange={e=>change("personalDetails",{...p.personalDetails,teachingMedium:e.target.value})}><option value="">Select teaching medium</option>{["English","Kannada","Hindi","Marathi","Tamil","Telugu","Malayalam","Urdu","Other"].map(v=><option key={v}>{v}</option>)}</select></label>{p.personalDetails.teachingMedium==="Other"&&<label>Other teaching medium<input maxLength={100} value={p.personalDetails.otherTeachingMedium||""} onChange={e=>change("personalDetails",{...p.personalDetails,otherTeachingMedium:e.target.value})}/></label>}</div>
 </>}
-              {pharmacy&&<div className="form-grid"><label>Registered pharmacist?<select value={p.pharmacyDetails.registered} onChange={e=>change("pharmacyDetails",{...p.pharmacyDetails,registered:e.target.value,council:"",registrationNumber:""})}>{["Pending","Yes","No"].map(v=><option key={v}>{v}</option>)}</select></label>{p.pharmacyDetails.registered==="Yes"&&<><label>Pharmacy council / state<input required value={p.pharmacyDetails.council} onChange={e=>change("pharmacyDetails",{...p.pharmacyDetails,council:e.target.value})}/></label><label>Registration number<input required value={p.pharmacyDetails.registrationNumber} onChange={e=>change("pharmacyDetails",{...p.pharmacyDetails,registrationNumber:e.target.value})}/></label></>}<label>Work preference<select value={p.pharmacyDetails.workType} onChange={e=>change("pharmacyDetails",{...p.pharmacyDetails,workType:e.target.value})}>{["Full-time","Part-time","Both"].map(v=><option key={v}>{v}</option>)}</select></label><label>Expected monthly pay (optional)<input type="number" min="0" value={p.pharmacyDetails.expectedPay??""} onChange={e=>change("pharmacyDetails",{...p.pharmacyDetails,expectedPay:e.target.value===""?null:Number(e.target.value)})}/></label><p className="muted">Registration is self-declared. Submitting a number does not mean it has been verified. No certificate-rental arrangement is offered.</p></div>}
-              <h3>{pharmacy?"Professional summary":"Teaching summary"}</h3>
+              {general&&!(p.jobInterests||[]).includes("teaching")&&<label>Employment status<select value={p.personalDetails.employmentStatus||""} onChange={e=>employmentStatus(e.target.value)}><option value="">Select employment status</option>{["Fresher","Previously worked","Currently working"].map(v=><option key={v}>{v}</option>)}</select></label>}
+              {pharmacy&&<div className="form-grid"><label>{nursing?"Registered nurse?":"Registered pharmacist?"}<select value={p[detailsKey].registered} onChange={e=>change(detailsKey,{...p[detailsKey],registered:e.target.value,council:"",registrationNumber:""})}>{["Pending","Yes","No"].map(v=><option key={v}>{v}</option>)}</select></label>{p[detailsKey].registered==="Yes"&&<><label>{nursing?"Nursing council / state":"Pharmacy council / state"}<input required value={p[detailsKey].council} onChange={e=>change(detailsKey,{...p[detailsKey],council:e.target.value})}/></label><label>Registration number<input required value={p[detailsKey].registrationNumber} onChange={e=>change(detailsKey,{...p[detailsKey],registrationNumber:e.target.value})}/></label></>}{nursing&&<><label>Department / specialty<input maxLength={150} value={p[detailsKey].department||""} onChange={e=>change(detailsKey,{...p[detailsKey],department:e.target.value})}/></label><label>Ready for night shift?<select value={p[detailsKey].nightShift} onChange={e=>change(detailsKey,{...p[detailsKey],nightShift:e.target.value})}>{["Yes","No","Open to discussion"].map(v=><option key={v}>{v}</option>)}</select></label></>}<label>Work preference<select value={p[detailsKey].workType} onChange={e=>change(detailsKey,{...p[detailsKey],workType:e.target.value})}>{["Full-time","Part-time","Both"].map(v=><option key={v}>{v}</option>)}</select></label><label>Expected monthly pay (optional)<input type="number" min="0" value={p[detailsKey].expectedPay??""} onChange={e=>change(detailsKey,{...p[detailsKey],expectedPay:e.target.value===""?null:Number(e.target.value)})}/></label><p className="muted">Registration is self-declared. Submitting a number does not mean it has been verified. No certificate-rental arrangement is offered.</p></div>}
+              {p.personalDetails.employmentStatus==="Currently working"&&<><label>Current job role (optional)<input maxLength={120} value={p.personalDetails.currentJobRole||""} placeholder="e.g. Accountant, Sales Executive, Teacher" onChange={e=>change("personalDetails",{...p.personalDetails,currentJobRole:e.target.value})}/></label><p className="muted">Your present work can differ from the job role / subject you want next. Do not include your employer name or contact details.</p></>}
+              <h3>{general?"Professional summary":pharmacy?"Professional summary":"Teaching summary"}</h3>
+              <p className="muted">{fresher?"Fresher: enter the role or subject you want to work in. Experience stays at zero; work history is optional.":"Enter your current or preferred role / subject and total experience in years and months."}</p><Button type="button" size="sm" variant="outline" onClick={()=>setProfileMessage(roleGuide)}>What should I fill?</Button>
               <div className="form-grid">
                 {[
-                  ["subject", pharmacy?"Role / area":"Primary subject"],
+                  ["subject", general?"Job role / subject of interest":pharmacy?"Role / area":"Primary subject"],
                   ["experience", "Experience (years)"],
                 ].map(([name, label]) =>
                   name === "qualification" ? (
@@ -323,6 +342,8 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
                       <input
                         required={name !== "mobile"}
                         value={p[name]}
+                        disabled={name==="experience"&&fresher}
+                        placeholder={name==="subject"?"e.g. Accounts Assistant, Sales Executive, Mathematics":undefined}
                         type={
                           ["salary", "experience", "noticeDays"].includes(name)
                             ? "number"
@@ -343,19 +364,19 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
                     </label>
                   ),
                 )}
-                <label className="experience-months-field">Experience (months)<input type="number" min="0" max="11" value={p.personalDetails.experienceMonths??0} onChange={e=>change("personalDetails",{...p.personalDetails,experienceMonths:e.target.value===""?"":Number(e.target.value)})}/></label>
+                <label className="experience-months-field">Experience (months)<input type="number" min="0" max="11" disabled={fresher} value={p.personalDetails.experienceMonths??0} onChange={e=>change("personalDetails",{...p.personalDetails,experienceMonths:e.target.value===""?"":Number(e.target.value)})}/></label>
               </div>
-              <h3>{pharmacy?"Pharmacy experience":"Teaching experience"}</h3>
+              <h3>{general?"Work experience":nursing?"Nursing experience":pharmacy?"Pharmacy experience":"Teaching experience"}</h3>
               <p className="muted">
                 Describe your role without naming your employer to protect your
                 identity.
               </p>
-              {list("experienceEntries", ["role", "subject", "years"])}
+              {fresher&&p.experienceEntries.length===0?<p className="muted">No work experience needed for freshers.</p>:list("experienceEntries", ["role", "subject", "years"])}
             </>
           )}
           {section === "Preferences" && (
             <>
-              <h3>Teaching preferences</h3>
+              <h3>{general?"Work preferences":pharmacy?"Work preferences":"Teaching preferences"}</h3>
               <div className="form-grid">
                 {[
                   ["salary", "Expected salary / month"],
@@ -397,12 +418,14 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
                 )}
               </div>
 
-              {pharmacy&&<PreferredPlaces api={api} ids={p.preferredPlaceIds||[]} onChange={(ids:string[])=>change("preferredPlaceIds",ids)}/>}
+              {(pharmacy||general)&&<PreferredPlaces api={api} ids={p.preferredPlaceIds||[]} locations={p.preferredLocations||[]} onChange={(ids:string[],locations:string[])=>{const next={...p,preferredPlaceIds:ids,preferredLocations:locations};setP(next);onDraftChange?.(next)}}/>}
+              {general&&<GeneralPreferences config={generalCfg} p={p} change={change}/>}
+              <div className={pharmacy?"pharmacy-preference-fields":""}>
               {[
                 ["skills", "Skills"],
                 ["subjects", "Subjects and classes"],
                 ["preferredLocations", "Preferred locations"],
-              ].filter(([key])=>!pharmacy||key!=="preferredLocations"&&key!=="subjects").map(([key, label]) => (
+              ].filter(([key])=>!(pharmacy||general)||key!=="preferredLocations"&&key!=="subjects").map(([key, label]) => (
                 <label key={key}>
                   <span>{label}</span> <small>· comma separated</small>
                   <input
@@ -416,6 +439,8 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
                   />
                 </label>
               ))}
+              {pharmacy&&<label>Description (optional)<textarea rows={2} maxLength={500} value={p[detailsKey].description||""} placeholder="Describe your experience and preferred work. Do not include contact details." onChange={e=>change(detailsKey,{...p[detailsKey],description:e.target.value})}/></label>}
+              </div>
             </>
           )}
           {section === "Privacy" && (
@@ -450,7 +475,7 @@ export function ProfileEditor({ data, busy, save, api, action, onDraftChange }: 
           )}
         </div>
         <div className="profile-save-bar">
-          <span>{section==="Privacy"?"Your changes are saved together.":"Continue to the next section."}</span><Button type={section==="Privacy"?"submit":"button"} disabled={busy} onClick={section==="Privacy"?undefined:()=>setSection(["Personal","Qualifications","Experience","Preferences","Privacy"][["Personal","Qualifications","Experience","Preferences","Privacy"].indexOf(section)+1])}>{section==="Privacy"?"Save profile":"Continue"}</Button>
+          <span>{section==="Privacy"?"Select Save profile to save all sections.":"Continue does not save. Save all sections under Privacy."}</span><Button type={section==="Privacy"?"submit":"button"} disabled={busy} onClick={section==="Privacy"?undefined:()=>setSection(["Personal","Qualifications","Experience","Preferences","Privacy"][["Personal","Qualifications","Experience","Preferences","Privacy"].indexOf(section)+1])}>{section==="Privacy"?"Save profile":"Continue"}</Button>
         </div>
       </form>
       <details

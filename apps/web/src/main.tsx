@@ -1,3 +1,11 @@
+import {CreditHistory} from "./CreditHistory";
+import {SubjectFilter} from "./SubjectFilter";
+import {GeneralJobFields,GeneralSettings,GeneralJobSummary,JobFeeInfo} from "./GeneralJobs";
+import {UnlockContact} from "./UnlockContact";
+import {PreferredWorkPlaces} from "./PreferredWorkPlaces";
+import {jobSalary} from "./jobSalary";
+import {ForgotPassword} from "./ForgotPassword";
+import { CompleteProfileDialog } from "./CompleteProfileDialog";
 import {ProfessionCandidateSearch} from "./ProfessionCandidateSearch";
 import {ProfessionFields,JobProfessionField} from "./ProfessionFields";
 import {UnavailableReports} from "./UnavailableReports";
@@ -39,6 +47,10 @@ import { useRegisterSW } from "virtual:pwa-register/react";
 import { WorkflowSettings, configureSettingsRequest } from "./WorkflowSettings";
 import { ProfileEditor } from "./ProfileEditor";
 type Item = Record<string, any>;
+// Keep printed campaign QR links valid while using the neutral registration URL.
+if (/^\/teacher-registration\/?$/.test(location.pathname)) {
+  history.replaceState(history.state,"","/registration"+location.search+location.hash);
+}
 let csrf = "";
 async function api(url: string, method = "GET", body?: unknown) {
   const r = await fetch("/api/" + url, {
@@ -68,6 +80,7 @@ function App() {
   } = useRegisterSW();
   const [candidateProfession,setCandidateProfession]=useState("TEACHER");
 
+  const [candidateSearchProfile,setCandidateSearchProfile]=useState<any>(null);
   const [teacherCandidates,setTeacherCandidates]=useState(true);
   const [online, setOnline] = useState(navigator.onLine);
   useEffect(() => {
@@ -93,11 +106,14 @@ function App() {
     [notifications, setNotifications] = useState<Item[]>([]),
     [showNotifications, setShowNotifications] = useState(false),
     [drawer, setDrawer] = useState(false);
+  const [forgotPassword,setForgotPassword]=useState(false);
+  const [newProfileProfession,setNewProfileProfession]=useState<string|null>(null);
   const [jobQuery,setJobQuery]=useState(""),[jobStatus,setJobStatus]=useState(""),[jobPage,setJobPage]=useState(1),[jobSize,setJobSize]=useState(10);
   useEffect(()=>setJobPage(1),[jobQuery,jobStatus,page]);
   const [mobileMenuHome,setMobileMenuHome]=useState(true);
   useEffect(()=>setMobileMenuHome(true),[user?.id]);
   const [registrationRole,setRegistrationRole]=useState("CANDIDATE");
+  const [creditProfession,setCreditProfession]=useState<string|undefined>(undefined);
   const [accountTab,setAccountTab]=useState("Overview");
   const [institutionName,setInstitutionName]=useState("");
   const employerProfile=useRef<Promise<any>|null>(null);
@@ -124,6 +140,7 @@ function App() {
         "Candidates",
         "Payments",
         "Plans",
+        ...(user?.role==="SUPER_ADMIN"?["General Jobs Settings"]:[]),
         "Settings",
         "Unavailable reports",
         "Audit",
@@ -157,6 +174,7 @@ function App() {
     Campaigns: Users,
     Payments: Wallet,
     Plans: FileText,
+    "General Jobs Settings": Settings,
     Settings: Settings,
     "Unavailable reports": ShieldCheck,
     Audit: ShieldCheck,
@@ -187,10 +205,24 @@ function App() {
         const professions=profile.tenant.recruitingProfessions||["TEACHER"];
         const teacherOnly=professions.length===1&&professions[0]==="TEACHER";
         if(version!==loadVersion.current)return;
+        setCandidateSearchProfile(profile);
         setTeacherCandidates(teacherOnly);
         const result=teacherOnly?await api("institution/candidates?page=1&profession=TEACHER"):{};
         if(version===loadVersion.current)setData(result);
         return;
+      }
+      if(!admin&&page==="Jobs"){const result=await api("institution/jobs");if(version===loadVersion.current)setData(result);return;}
+      if(admin&&page==="Candidates"){const result=await api("admin/candidates");if(version===loadVersion.current)setData(result);return;}
+      if((admin&&page==="Institutions")||(!admin&&page==="Find Jobs")){
+        const result=await api(admin?"admin/institutions":"jobs?q="+encodeURIComponent(query));
+        if(version===loadVersion.current)setData(result);
+        return;
+      }
+      if(admin){
+        const independent=["Campaigns","General Jobs Settings","Plans","Audit","Unavailable reports"].includes(page);
+        if(independent){if(version===loadVersion.current)setData({});return;}
+        const endpoint=page==="Settings"?"admin/settings-view":page==="Payments"?"admin/payments-view":"admin/overview";
+        const result=await api(endpoint);if(version===loadVersion.current)setData(result);return;
       }
       const [currentFeatures,price]=await Promise.all([api("features"),api("commerce/config")]);
 
@@ -275,7 +307,9 @@ function App() {
     return Object.fromEntries(new FormData(e.currentTarget));
   };
   async function authenticate(e: React.FormEvent<HTMLFormElement>) {
+    const isRegistration=!!modal?.register;
     const values = form(e);
+    if(values.generalCategories)values.generalCategories=JSON.parse(String(values.generalCategories));
     if(values.recruitingProfessions)values.recruitingProfessions=JSON.parse(String(values.recruitingProfessions));
     await action(async () => {
       const s = await api(
@@ -285,6 +319,7 @@ function App() {
       );
       csrf = s.csrf;
       setUser(s.user);
+      if(isRegistration&&s.user.role==="CANDIDATE")setNewProfileProfession(String(values.profession||"TEACHER"));
       setPage(
         s.user.role === "CANDIDATE"
           ? "Home"
@@ -316,27 +351,27 @@ function App() {
       setBusy(false);
     }
   }
-  function candidateCard(c:Item){return <tr key={c.id}><td><strong>{c.displayId}</strong></td><td>{c.subject || "—"}</td><td>{c.qualification || "—"}</td><td>{c.location || "—"}</td><td>{c.experience} yrs</td><td className="candidate-mobile">{c.contactUnlocked ? (c.mobile || "Not provided") : "Locked"}</td><td><Button size="sm" variant="outline" onClick={()=>setModal({type:"candidateView",candidate:c})}>View <ArrowRight size={13}/></Button></td></tr>;}
+  function candidateCard(c:Item){return <tr key={c.id}><td><strong>{c.displayId}</strong></td><td>{c.subject || "—"}</td><td>{c.qualification || "—"}</td><td>{c.location || "—"}</td><td className="preferred-places-cell"><PreferredWorkPlaces places={c.preferredLocations}/></td><td>{c.experience} yrs</td><td>{c.salary>0?"Rs. "+c.salary.toLocaleString("en-IN"):"Not specified"}</td><td className="candidate-mobile">{c.contactUnlocked ? (c.mobile || "Not provided") : "Locked"}</td><td><Button size="sm" variant="outline" onClick={()=>setModal({type:"candidateView",candidate:c})}>View <ArrowRight size={13}/></Button></td></tr>;}
   function jobCard(j: Item) {
-    if(candidate)return <button type="button" className="job-list-row" key={j.id} onClick={()=>setModal({type:"apply",job:j})}><span className="job-row-icon"><BriefcaseBusiness size={20}/></span><span className="job-row-info"><strong>{j.title}</strong><small>{j.institution||"Institution"} · {j.location} · {j.subject}</small></span><span className="job-row-meta"><strong>₹{j.salary.toLocaleString("en-IN")}/month</strong><small>Closes {new Date(j.closesAt).toLocaleDateString("en-IN")}</small></span><ArrowRight size={18}/></button>;
-    return <article className="institution-job-row" key={j.id}><button className="job-row-info job-row-open" onClick={()=>setModal({type:"jobDetails",job:j})}><strong>{j.title}</strong><small>{j.subject} · {j.location} · ₹{j.salary.toLocaleString("en-IN")}/month</small></button><span className="job-closing">Closes {new Date(j.closesAt).toLocaleDateString("en-IN")}</span><span className="badge" data-status={j.status}>{j.status === "PUBLISHED" ? "Published" : "Closed"}</span><Button size="sm" variant="outline" onClick={()=>setModal({type:"jobDetails",job:j})}>View</Button>{j.status === "PUBLISHED" && <Button size="sm" variant="outline" disabled={busy} onClick={()=>action(()=>api("institution/jobs/"+j.id+"/close","PATCH"),"Job closed")}>Close job</Button>}</article>;
+    if(candidate)return <button type="button" className="job-list-row" key={j.id} onClick={()=>setModal({type:"apply",job:j})}><span className="job-row-icon"><BriefcaseBusiness size={20}/></span><span className="job-row-info"><strong>{j.title}</strong><small>{j.institution||"Institution"} · {j.location} · {j.subject}</small></span><span className="job-row-meta"><strong>{jobSalary(j)}/month</strong><small>Closes {new Date(j.closesAt).toLocaleDateString("en-IN")}</small></span><ArrowRight size={18}/></button>;
+    return <article className="institution-job-row" key={j.id}><button className="job-row-info job-row-open" onClick={()=>setModal({type:"jobDetails",job:j})}><strong>{j.title}</strong><small>{j.subject} · {j.location} · {jobSalary(j)}/month</small></button><span className="job-closing">Closes {new Date(j.closesAt).toLocaleDateString("en-IN")}</span><span className="badge" data-status={j.status}>{j.status === "PUBLISHED" ? "Published" : "Closed"}</span><Button size="sm" variant="outline" onClick={()=>setModal({type:"jobDetails",job:j})}>View</Button>{j.status === "PUBLISHED" && <Button size="sm" variant="outline" onClick={()=>setModal({type:"job",job:j})}>Edit</Button>}{j.status === "PUBLISHED" && <Button size="sm" variant="outline" disabled={busy} onClick={()=>action(()=>api("institution/jobs/"+j.id+"/close","PATCH"),"Job closed")}>Close job</Button>}</article>;
   }
-  if(location.pathname==="/teacher-registration")return <TeacherRegistration api={api} onSession={(v:any)=>{csrf=v.csrf}}/>;
+  if(/^\/registration\/?$/.test(location.pathname))return <TeacherRegistration api={api} onSession={(v:any)=>{csrf=v.csrf}}/>;
   if (!ready)
     return (
       <main className="auth-page">
         <GraduationCap size={40} />
-        <p>Opening CampusFaculty…</p>
+        <p>Opening TeliCareers…</p>
       </main>
     );
   if (!user)
     return (
       <main className="auth-page">
         <div className="auth-layout">
-          <section>
+          <section className="auth-intro">
         <div className="auth-brand">
           <GraduationCap size={32} />
-          <strong>CampusFaculty</strong>
+          <strong>TeliCareers</strong>
         </div>
 
             <span className="eyebrow">GREAT PEOPLE. NEW OPPORTUNITIES.</span>
@@ -346,7 +381,7 @@ function App() {
               <span>starts here.</span>
             </h1>
             <p>
-              Connect with opportunities in teaching and pharmacy. Find your next role or build your team.
+              Connect with opportunities across General Jobs, Pharmacy and Nursing. Find your next role or build your team.
             </p>
             <div className="auth-benefits">
               <p>
@@ -356,11 +391,11 @@ function App() {
                 <CheckCircle2 /> One place for your hiring journey
               </p>
               <p>
-                <CheckCircle2 /> Teachers and pharmacists
+                <CheckCircle2 /> General Jobs, Pharmacy and Nursing
               </p>
             </div>
           </section>
-          <form className={"card auth-card"+(modal?.register?" auth-signup"+(registrationRole==="TENANT_ADMIN"?" auth-employer":""):"")} onSubmit={authenticate}>
+          {forgotPassword?<ForgotPassword api={api} onBack={()=>{setForgotPassword(false);setModal(null);setError("")}}/>:<form className={"card auth-card"+(modal?.register?" auth-signup"+(registrationRole==="TENANT_ADMIN"?" auth-employer":""):"")} onSubmit={authenticate}>
             <h2>{modal?.register ? "Create your account" : "Welcome back"}</h2>
             <p>
               {modal?.register
@@ -380,7 +415,7 @@ function App() {
                     <option value="TENANT_ADMIN">Employer / Institution</option>
                   </select>
                 </label>
-                {registrationRole==="CANDIDATE"?<label>Profession<select name="profession"><option value="TEACHER">Teacher</option><option value="PHARMACIST">Pharmacist</option></select></label>:<><label>Organization name<input name="institution" required minLength={2}/></label><ProfessionFields/></>}
+                {registrationRole==="CANDIDATE"?<label>Profession<select name="profession"><option value="GENERAL">General Jobs</option><option value="PHARMACIST">Pharmacist</option><option value="NURSE">Nurse</option></select></label>:<><label>Organization name<input name="institution" required minLength={2}/></label><ProfessionFields api={api}/></>}
               </>
             )}
             <label>
@@ -399,6 +434,7 @@ function App() {
                 required
               />
             </label>
+            {!modal?.register&&<button type="button" className="text-button" onClick={()=>{setForgotPassword(true);setError("")}}>Forgot password?</button>}
             {error && (
               <div role="alert" className="alert error">
                 {error}
@@ -424,26 +460,26 @@ function App() {
                 ? "Already registered? Sign in"
                 : "New here? Create an account"}
             </button>
-          </form>
+          </form>}
         </div>
-        <footer>CampusFaculty · Thoughtful connections for education</footer>
+        <footer>TeliCareers · Connecting people with opportunities</footer>
       </main>
     );
   return (
-    <div className="app-shell">{["Profile saved","Contact access checked"].includes(success)&&<FeedbackDialog success title={success==="Profile saved"?"Profile saved successfully":"Contact access checked"} message={success==="Profile saved"?"Your profile changes have been saved.":"Contact access has been checked. Available contact details are shown in the contact dialog."} onClose={()=>setSuccess("")}/> }
+    <div className="app-shell">{newProfileProfession&&<CompleteProfileDialog profession={newProfileProfession} onComplete={()=>{setNewProfileProfession(null);setPage("Profile");setMobileMenuHome(false);window.scrollTo(0,0)}} onLater={()=>{setNewProfileProfession(null);setPage("Home");setMobileMenuHome(true)}}/>}{success&&<FeedbackDialog success title={success==="Profile saved"?"Profile saved successfully":success==="Saved"?"Settings saved":"Success"} message={success==="Profile saved"?"Your profile changes have been saved.":success==="Saved"?"Your changes have been saved successfully.":success} onClose={()=>setSuccess("")}/> }
       <aside className="sidebar">
         <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
           <span className="brand-icon">
             <GraduationCap />
           </span>
-          <strong>CampusFaculty</strong>
+          <strong>TeliCareers</strong>
         </a>
         <div className="workspace">
           {(candidate||admin)&&<span className="avatar">{user.name.slice(0, 1)}</span>}
           <div>
             <strong>
               {candidate
-                ? (candidateProfession==="PHARMACIST"?"Pharmacist workspace":"Teacher workspace")
+                ? (candidateProfession==="GENERAL"?"General Jobs workspace":candidateProfession==="NURSE"?"Nurse workspace":candidateProfession==="PHARMACIST"?"Pharmacist workspace":"Teacher workspace")
                 : admin
                   ? "Platform workspace"
                   : institutionName || "Institution"}
@@ -454,7 +490,7 @@ function App() {
 
         <nav>
           {nav.map((n) => {
-            const Icon = icons[n];
+            const Icon = icons[n]||Settings;
             return (
               <button
                 key={n}
@@ -483,10 +519,10 @@ function App() {
         </button>
       </aside>
       <div className={"main-shell"+(mobileMenuHome?" mobile-menu-home":"")}>
-        <header className="topbar"><button className="mobile-menu-return" onClick={()=>{setMobileMenuHome(true);setShowNotifications(false)}}><GraduationCap size={20}/><span>{mobileMenuHome?"CampusFaculty":"All menus"}</span></button>
+        <header className="topbar"><button className="mobile-menu-return" onClick={()=>{setMobileMenuHome(true);setShowNotifications(false)}}><GraduationCap size={20}/><span>{mobileMenuHome?"TeliCareers":"All menus"}</span></button>
           <span>
             {candidate
-              ? (candidateProfession==="PHARMACIST"?"Your pharmacy journey":"Your teaching journey")
+              ? (candidateProfession==="GENERAL"?"General Jobs workspace":candidateProfession==="NURSE"?"Your nursing journey":candidateProfession==="PHARMACIST"?"Your pharmacy journey":"Your teaching journey")
               : admin
                 ? "Platform management"
                 : "Build your teaching team"}
@@ -519,11 +555,11 @@ function App() {
             </button>
           </div>
         </header>
-        <section className="mobile-menu-hub" aria-label="Workspace menus">
+        <section className={"mobile-menu-hub"+(admin?" owner-menu-hub":"")} aria-label="Workspace menus">
           <p>Welcome, {institutionName || user.name}</p>
-          <h1>{admin ? "Platform management" : candidate ? (candidateProfession==="PHARMACIST"?"Your pharmacy workspace":"Your teaching workspace") : "Your institution workspace"}</h1>
+          <h1>{admin ? "Platform management" : candidate ? (candidateProfession==="GENERAL"?"General Jobs workspace":candidateProfession==="NURSE"?"Your nursing workspace":candidateProfession==="PHARMACIST"?"Your pharmacy workspace":"Your teaching workspace") : "Your institution workspace"}</h1>
           <p>Choose a menu to get started.</p>
-          <div className="mobile-menu-grid">{nav.map((n,i)=>{const Icon=icons[n];return <button key={n} className={"mobile-menu-card menu-color-"+(i%6)} onClick={()=>{setPage(n);setMobileMenuHome(false);setShowNotifications(false);window.scrollTo(0,0)}}><span><Icon size={28}/></span><strong>{n}</strong><small>Open {n.toLowerCase()}</small></button>})}</div>
+          <div className="mobile-menu-grid">{nav.map((n,i)=>{const Icon=icons[n]||Settings;return <button key={n} className={"mobile-menu-card menu-color-"+(i%6)} onClick={()=>{setPage(n);setMobileMenuHome(false);setShowNotifications(false);window.scrollTo(0,0)}}><span><Icon size={28}/></span><strong>{n}</strong><small>Open {n.toLowerCase()}</small></button>})}</div>
         </section>
         <main className={"content" + (admin ? " admin-content" : "")}>
           {!online && (
@@ -550,14 +586,6 @@ function App() {
             </div>
           )}
           {error&&<FeedbackDialog message={error} onClose={()=>setError("")}/>}
-          {success && (
-            <div className="alert success" role="status">
-              {success}
-              <button aria-label="Dismiss" onClick={() => setSuccess("")}>
-                <X size={15} />
-              </button>
-            </div>
-          )}
           {showNotifications && (
             <section className="card notifications">
               <div className="flex-between">
@@ -675,7 +703,7 @@ function App() {
                 )
                   .filter((n) => available(n))
                   .map((n, i) => {
-                    const Icon = icons[n];
+                    const Icon = icons[n]||Settings;
                     return (
                       <button
                         className="card module"
@@ -711,7 +739,7 @@ function App() {
           {candidate && page === "Payments" && (
             <CommercePanel api={api} role={user.role} />
           )}
-          {page === "Find Jobs" && <TeacherListings rows={data||[]} setModal={setModal}/>}
+          {page === "Find Jobs" && <TeacherListings api={api} rows={data||[]} setModal={setModal}/>}
           {page === "Candidates" && !admin && teacherCandidates && (
 
             <>
@@ -806,27 +834,7 @@ function App() {
 
               >
 
-                <label>Subject
-
-                <input
-
-                  aria-label="Subject or location"
-
-                  value={query}
-
-                  onChange={(e) => {
-
-                    setQuery(e.target.value);
-
-                    setSearchSession("");
-
-                  }}
-
-                  placeholder="Subject"
-
-                />
-
-                </label><label>Degree<select aria-label="Degree filter" value={degreeFilter} onChange={e=>{setDegreeFilter(e.target.value);setSearchSession("");}}><option value="">Any degree</option>{["SSLC","10th / SSC","PUC / 12th","PUC Science","B.A","B.Sc","B.Com","D.Ed","B.Ed","Both B.Ed & D.Ed","M.A","M.Sc","M.Com","M.Ed","D.El.Ed","B.El.Ed","B.Tech","B.E","M.Tech","MBA","MCA","BCA","Ph.D","NET / SET","Diploma"].map(v=><option key={v}>{v}</option>)}</select></label><label>Place<input aria-label="Place filter" placeholder="Place" value={placeFilter} onChange={e=>{setPlaceFilter(e.target.value);setSearchSession("");}}/>
+<label>Degree<select aria-label="Degree filter" value={degreeFilter} onChange={e=>{setDegreeFilter(e.target.value);setSearchSession("");}}><option value="">Any degree</option>{["SSLC","10th / SSC","PUC / 12th","PUC Science","B.A","B.Sc","B.Com","D.Ed","B.Ed","Both B.Ed & D.Ed","M.A","M.Sc","M.Com","M.Ed","B.Tech","B.E","M.Tech","MBA","MCA","BCA","Ph.D","NET / SET","Diploma"].map(v=><option key={v}>{v}</option>)}</select></label>                <label>Subject<SubjectFilter value={query} onChange={(v:string)=>{setQuery(v);setSearchSession("")}} extra={(data?.items||[]).map((c:any)=>c.subject)}/></label><label>Place<input aria-label="Place filter" placeholder="Place" value={placeFilter} onChange={e=>{setPlaceFilter(e.target.value);setSearchSession("");}}/>
 
                 </label><div className="filter-actions"><Button disabled={busy} size="sm">Search</Button><Button type="button" variant="outline" size="sm" disabled={busy} onClick={async()=>{setQuery("");setDegreeFilter("");setPlaceFilter("");setSearchSession("");setBusy(true);try{setData(await api("institution/candidates?page=1"));}catch(e:any){setError(e.message);}finally{setBusy(false);}}}>Reset</Button></div>
 
@@ -834,7 +842,7 @@ function App() {
 
 
 
-              <section className="candidate-table-panel"><div className="candidate-table-toolbar"><span>{data ? data.items.length + " candidates - Page " + data.page : "Loading candidates�"}</span><small>Contacts stay protected until unlocked</small></div><div className="candidate-table-scroll" role="region" aria-label="Candidate results" tabIndex={0}><table className="candidate-table"><thead><tr><th scope="col">Candidate ID</th><th scope="col">Subject</th><th scope="col">Degree</th><th scope="col">Place</th><th scope="col">Experience</th><th scope="col">Mobile</th><th scope="col">Action</th></tr></thead><tbody>{data?.items?.map(candidateCard)}</tbody></table></div></section>
+              <section className="candidate-table-panel"><div className="candidate-table-toolbar"><span>{data ? data.items.length + " candidates - Page " + data.page : "Loading candidates�"}</span><small>Contacts stay protected until unlocked</small></div><div className="candidate-table-scroll" role="region" aria-label="Candidate results" tabIndex={0}><table className="candidate-table"><thead><tr><th scope="col">Candidate ID</th><th scope="col">Subject</th><th scope="col">Degree</th><th scope="col">Current place</th><th scope="col">Preferred work places</th><th scope="col">Experience</th><th scope="col">Expected salary / month</th><th scope="col">Mobile</th><th scope="col">Action</th></tr></thead><tbody>{data?.items?.map(candidateCard)}</tbody></table></div></section>
 
               {!data && (
 
@@ -890,10 +898,10 @@ function App() {
 
           )}
 
-          {page === "Candidates" && !admin && !teacherCandidates && <ProfessionCandidateSearch api={api} setModal={setModal}/>}
+          {page === "Candidates" && !admin && !teacherCandidates && <ProfessionCandidateSearch api={api} setModal={setModal} profile={candidateSearchProfile}/>}
           {page === "Jobs" && modal?.type !== "job" && (()=>{const rows=(data||[]).filter((j:Item)=>(!jobStatus||j.status===jobStatus)&&[j.title,j.subject,j.location].join(" ").toLowerCase().includes(jobQuery.trim().toLowerCase()));return <><div className="admin-candidate-filters"><label>Search jobs<input value={jobQuery} placeholder="Title / subject / place" onChange={e=>setJobQuery(e.target.value)}/></label><label>Status<select value={jobStatus} onChange={e=>setJobStatus(e.target.value)}><option value="">All jobs</option><option value="PUBLISHED">Published</option><option value="CLOSED">Closed</option></select></label><Button size="sm" variant="outline" onClick={()=>{setJobQuery("");setJobStatus("")}}>Reset</Button></div><section className="job-list">{rows.slice((jobPage-1)*jobSize,jobPage*jobSize).map(jobCard)}</section><Pagination total={rows.length} page={jobPage} size={jobSize} onPage={setJobPage} onSize={setJobSize}/>{!rows.length&&<Empty text="No jobs match these filters."/>}</>})()}
-          {page === "Jobs" && modal?.type === "job" && <section className="card job-compose"><div className="flex-between"><h2>Post a job</h2><Button size="sm" variant="outline" disabled={busy} onClick={()=>setModal(null)}>Cancel</Button></div><Modal modal={modal} busy={busy} action={action} setModal={setModal} form={form} pricing={commercial}/></section>}
-          {page === "Applications" && <TeacherListings rows={data||[]} applications setModal={setModal}/>}
+          {page === "Jobs" && modal?.type === "job" && <section className="card job-compose"><div className="flex-between"><h2>{modal.job?"Edit job":"Post a job"}</h2><Button size="sm" variant="outline" disabled={busy} onClick={()=>setModal(null)}>Cancel</Button></div><Modal modal={modal} busy={busy} action={action} setModal={setModal} form={form} pricing={commercial}/></section>}
+          {page === "Applications" && <TeacherListings api={api} rows={data||[]} applications setModal={setModal}/>}
           {page === "Profile" && data && (
             <>
               {!!commercial.profileFee && !commercial.profileActivated && (
@@ -935,7 +943,7 @@ function App() {
             </section>
           )}
           {page === "Account" && data && (
-            <div className="account-layout"><div className="settings-tabs account-tabs" role="tablist" aria-label="Account sections">{["Overview","Purchases","Invoices","Payments","Credit History"].map(v=><button role="tab" aria-selected={accountTab===v} className={accountTab===v?"active":""} key={v} onClick={()=>setAccountTab(v)}>{v}</button>)}</div>
+            <div className="account-layout"><div className="settings-tabs account-tabs" role="tablist" aria-label="Account sections">{["Overview",...(user.role==="TENANT_ADMIN"?["Edit institution","Manage team"]:[]),"Invoices","Payments","Credit History"].map(v=><button role="tab" aria-selected={accountTab===v} className={accountTab===v?"active":""} key={v} onClick={async()=>{if(v==="Manage team"||v==="Edit institution"){try{setModal(v==="Manage team"?{type:"team",team:await api("institution/team")}:{type:"institutionProfile",value:await api("institution/profile")})}catch(e:any){setError(e.message)}}else setAccountTab(v)}}>{v}</button>)}</div>
               {accountTab==="Overview" && <>
               <div className="card account-summary">
                 <h2>{data.tenant?.name}</h2>
@@ -952,9 +960,9 @@ function App() {
                     </strong>
                   </div>
                   <div>
-                    <small>Credits</small>
+                    <small>{data.tenant?.recruitingProfessions?.length===1&&data.tenant.recruitingProfessions[0]==="TEACHER"?"Credits":"Teacher credits"}</small>
                     <strong>{data.credits}</strong>
-                  </div>
+                  </div>{data.professionBalances?.filter((g:Item)=>g.profession!=="TEACHER").map((g:Item)=><div key={g.profession}><small>{g.profession==="GENERAL"?"General":g.profession==="NURSE"?"Nursing":"Pharmacy"} credits</small><strong>{g._sum.remaining||0}</strong></div>)}
                   <div>
                     <small>
                       {data.pricing?.enabled ? "Credit validity" : "Expires"}
@@ -971,37 +979,9 @@ function App() {
                   </div>
                 </div>
               </div>
-              <div className="card-actions">
-                {user.role === "TENANT_ADMIN" && (
-                  <>
-                    <Button
-                      variant="outline"
-                      onClick={async () =>
-                        setModal({
-                          type: "team",
-                          team: await api("institution/team"),
-                        })
-                      }
-                    >
-                      Manage team
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={async () =>
-                        setModal({
-                          type: "institutionProfile",
-                          value: await api("institution/profile"),
-                        })
-                      }
-                    >
-                      Edit institution
-                    </Button>
-                  </>
-                )}
-              </div>
               </>}
-              {data.pricing?.enabled && ["Overview","Purchases"].includes(accountTab) && (
-                <CommercePanel api={api} role={user.role} view={accountTab==="Overview"?"overview":"history"} />
+              {data.pricing?.enabled && accountTab==="Overview" && (
+                <CommercePanel api={api} role={user.role} initialProfession={creditProfession} view="all" />
               )}
               {accountTab==="Invoices" && <section className="account-history"><h3>Invoices · {data.invoices.length}</h3>{!data.invoices.length&&<p>No invoices yet.</p>}
               <div className="card">
@@ -1044,21 +1024,7 @@ function App() {
                   <Empty text="Your plan payments will appear here." />
                 )}
               </section>
-              </section>}{accountTab==="Credit History" && <section className="account-history"><h3>Credit history · {data.ledger.length}</h3>{!data.ledger.length&&<p>No credit transactions yet.</p>}
-              <div className="card">
-                {data.ledger.map((l: Item) => (
-                  <div className="ledger-row" key={l.id}>
-                    <span>{l.type.replaceAll("_", " ")}</span>
-                    <small>
-                      {new Date(l.createdAt).toLocaleDateString("en-IN")}
-                    </small>
-                    <strong>
-                      {l.delta > 0 ? "+" : ""}
-                      {l.delta}
-                    </strong>
-                  </div>
-                ))}
-              </div></section>}
+              </section>}{accountTab==="Credit History" && <CreditHistory items={data.ledger}/>}
             </div>
           )}
           {admin && data && (
@@ -1073,12 +1039,12 @@ function App() {
           )}
         </main>
         <footer className="app-footer">
-          CampusFaculty · Connections that help education grow
+          TeliCareers · Connections that help careers grow
         </footer>
       </div>
       <nav className={"bottom-nav" + (admin ? " admin-nav" : "")}>
         {nav.map((n) => {
-          const Icon = icons[n];
+          const Icon = icons[n]||Settings;
           return (
             <button
               key={n}
@@ -1099,7 +1065,7 @@ function App() {
           }}
         >
           <section
-            className={"card modal"+(["candidateView","adminCandidate"].includes(modal.type)?" profile-detail-modal":"")}
+            className={"card modal"+(["apply","jobDetails"].includes(modal.type)?" job-details-modal":"")+(["candidateView","adminCandidate"].includes(modal.type)?" profile-detail-modal":"")}
             role="dialog"
             aria-modal="true"
             aria-label={modal.type}
@@ -1118,6 +1084,7 @@ function App() {
               key={modal.type}
               modal={modal}
               pricing={commercial}
+              onBuyCredits={(profession:string)=>{setCreditProfession(profession);setAccountTab("Overview");setModal(null);setError("");setPage("Account");setMobileMenuHome(false)}}
               busy={busy}
               api={api}
               action={action}
@@ -1138,19 +1105,24 @@ function Empty({ text }: { text: string }) {
     </div>
   );
 }
+const employerTypes=["School","College / Institute","Medical shop / Pharmacy","Hospital","Medical college","Clinic","Bank","Showroom","Company","Other","Not specified"];
+function employerType(value:any){const v=String(value||"").trim().toLowerCase();if(!v)return "Not specified";if(v==="school")return "School";if(["college","institute","college / institute","university","coaching"].includes(v))return "College / Institute";if(["medical shop","medicalshop","pharmacy","medical shop / pharmacy"].includes(v))return "Medical shop / Pharmacy";if(v==="hospital")return "Hospital";if(v==="medical college")return "Medical college";if(v==="clinic")return "Clinic";if(v==="bank")return "Bank";if(v==="showroom")return "Showroom";if(v==="company")return "Company";return "Other";}
 function Admin({ page, data, busy, superAdmin, action, setModal }: any) {
   const [tablePage,setTablePage]=useState(1),[tableSize,setTableSize]=useState(10),[auditQuery,setAuditQuery]=useState(""),[auditType,setAuditType]=useState("");
   const [institutionQuery,setInstitutionQuery]=useState(""),[institutionStatus,setInstitutionStatus]=useState("");
+  const [institutionType,setInstitutionType]=useState("");
+  const [candidateProfessionFilter,setCandidateProfessionFilter]=useState("");
   const [candidateName,setCandidateName]=useState("");
   const [candidatePlace,setCandidatePlace]=useState("");
   const [candidateApproval,setCandidateApproval]=useState("");
-  useEffect(()=>setTablePage(1),[page,candidateName,candidatePlace,candidateApproval,institutionQuery,institutionStatus,auditQuery,auditType]);
-  const filteredCandidates = page === "Candidates" ? data.filter((c:Item)=>[c.displayId,c.user.name,c.personalDetails?.firstName,c.personalDetails?.lastName].filter(Boolean).join(" ").toLowerCase().includes(candidateName.trim().toLowerCase()) && String(c.location||"").toLowerCase().includes(candidatePlace.trim().toLowerCase()) && (!candidateApproval || (candidateApproval === "approved" ? c.profileReviewed : !c.profileReviewed))) : [];
+  useEffect(()=>setTablePage(1),[page,candidateProfessionFilter,candidateName,candidatePlace,candidateApproval,institutionQuery,institutionStatus,institutionType,auditQuery,auditType]);
+  const filteredCandidates = page === "Candidates" ? data.filter((c:Item)=>(!candidateProfessionFilter||(c.profession||"TEACHER")===candidateProfessionFilter)&&[c.displayId,c.user.name,c.personalDetails?.firstName,c.personalDetails?.lastName].filter(Boolean).join(" ").toLowerCase().includes(candidateName.trim().toLowerCase()) && String(c.location||"").toLowerCase().includes(candidatePlace.trim().toLowerCase()) && (!candidateApproval || (candidateApproval === "approved" ? c.profileReviewed : !c.profileReviewed))) : [];
+  if(page==="General Jobs Settings")return <GeneralSettings api={api}/>;
   if(page==="Unavailable reports")return <UnavailableReports api={api}/>;
   if(page==="Campaigns")return <Campaigns api={api}/>;
   if (page === "Candidates")
     return (
-      <><div className="admin-candidate-filters"><label>Name / candidate ID<input value={candidateName} onChange={e=>setCandidateName(e.target.value)} placeholder="Name or TC…"/></label><label>Place<input value={candidatePlace} onChange={e=>setCandidatePlace(e.target.value)} placeholder="City / town"/></label><label>Profile status<select value={candidateApproval} onChange={e=>setCandidateApproval(e.target.value)}><option value="">All profiles</option><option value="approved">Approved</option><option value="pending">Awaiting approval</option></select></label><Button size="sm" variant="outline" onClick={()=>{setCandidateName("");setCandidatePlace("");setCandidateApproval("")}}>Reset</Button></div><div className="admin-directory-panel"><div className="directory-count">{filteredCandidates.length} candidates</div><div className="directory-scroll"><table className="admin-directory-table"><thead><tr>{["Candidate ID","Name","Subject","Degree","Place","Profile","Account","Action"].map(v=><th scope="col" key={v}>{v}</th>)}</tr></thead><tbody>{filteredCandidates.slice((tablePage-1)*tableSize,tablePage*tableSize).map((c:Item)=><tr key={c.id}><td>{c.displayId}</td><td>{c.user.name}</td><td>{c.subject}</td><td>{c.qualification}</td><td>{c.location}</td><td>{c.profileReviewed?"Approved":"Pending"}</td><td>{c.user.active?"Active":"Blocked"}</td><td><Button size="sm" variant="outline" onClick={()=>setModal({type:"adminCandidate",candidate:c})}>View</Button></td></tr>)}</tbody></table></div><Pagination total={filteredCandidates.length} page={tablePage} size={tableSize} onPage={setTablePage} onSize={setTableSize}/>{!filteredCandidates.length&&<p className="directory-empty">No candidates match these filters.</p>}</div></>
+      <><div className="admin-candidate-filters owner-candidate-filters"><label>Name / candidate ID<input value={candidateName} onChange={e=>setCandidateName(e.target.value)} placeholder="Name or TC…"/></label><label>Profession<select value={candidateProfessionFilter} onChange={e=>setCandidateProfessionFilter(e.target.value)}><option value="">All professions</option><option value="GENERAL">General Jobs</option><option value="TEACHER">Teachers (legacy)</option><option value="PHARMACIST">Pharmacists</option><option value="NURSE">Nurses</option></select></label><label>Place<input value={candidatePlace} onChange={e=>setCandidatePlace(e.target.value)} placeholder="City / town"/></label><label>Profile status<select value={candidateApproval} onChange={e=>setCandidateApproval(e.target.value)}><option value="">All profiles</option><option value="approved">Approved</option><option value="pending">Awaiting approval</option></select></label><Button size="sm" variant="outline" onClick={()=>{setCandidateProfessionFilter("");setCandidateName("");setCandidatePlace("");setCandidateApproval("")}}>Reset</Button></div><div className="admin-directory-panel"><div className="directory-count">{filteredCandidates.length} candidates</div><div className="directory-scroll"><table className="admin-directory-table"><thead><tr>{["Candidate ID","Name","Profession","Subject","Degree","Place","Profile","Account","Action"].map(v=><th scope="col" key={v}>{v}</th>)}</tr></thead><tbody>{filteredCandidates.slice((tablePage-1)*tableSize,tablePage*tableSize).map((c:Item)=><tr key={c.id}><td>{c.displayId}</td><td>{c.user.name}</td><td>{c.profession==="GENERAL"?"General Jobs":c.profession==="NURSE"?"Nurse":c.profession==="PHARMACIST"?"Pharmacist":"Teacher"}</td><td>{c.subject}</td><td>{c.qualification}</td><td>{c.location}</td><td>{c.profileReviewed?"Approved":"Pending"}</td><td>{c.user.active?"Active":"Blocked"}</td><td><Button size="sm" variant="outline" onClick={()=>setModal({type:"adminCandidate",candidate:c})}>View</Button></td></tr>)}</tbody></table></div><Pagination total={filteredCandidates.length} page={tablePage} size={tableSize} onPage={setTablePage} onSize={setTableSize}/>{!filteredCandidates.length&&<p className="directory-empty">No candidates match these filters.</p>}</div></>
     );
   if (page === "Overview")
     return (
@@ -1192,7 +1164,7 @@ function Admin({ page, data, busy, superAdmin, action, setModal }: any) {
         </div>
       </>
     );
-  if(page === "Institutions") { const rows=data.tenants.filter((t:Item)=>[t.name,t.id,t.contactPerson,t.mobile,t.officialEmail].join(" ").toLowerCase().includes(institutionQuery.trim().toLowerCase())&&(!institutionStatus||(institutionStatus==="verified"?t.verified&&!t.blocked:institutionStatus==="pending"?!t.verified&&!t.blocked:t.blocked))); return <><div className="admin-candidate-filters"><label>Name / institution ID<input value={institutionQuery} placeholder="Search institutions" onChange={e=>setInstitutionQuery(e.target.value)}/></label><label>Status<select value={institutionStatus} onChange={e=>setInstitutionStatus(e.target.value)}><option value="">All institutions</option><option value="verified">Verified</option><option value="pending">Awaiting verification</option><option value="blocked">Blocked</option></select></label><Button size="sm" variant="outline" onClick={()=>{setInstitutionQuery("");setInstitutionStatus("")}}>Reset</Button></div><div className="admin-directory-panel"><div className="directory-count">{rows.length} institutions</div><div className="directory-scroll"><table className="admin-directory-table"><thead><tr>{["Institution","Contact person","Mobile","Verification","Account","Action"].map(v=><th key={v} scope="col">{v}</th>)}</tr></thead><tbody>{rows.slice((tablePage-1)*tableSize,tablePage*tableSize).map((t:Item)=><tr key={t.id}><td><strong>{t.name}</strong></td><td>{t.contactPerson||"Not added"}</td><td>{t.mobile||"Not added"}</td><td>{t.verified?"Verified":"Pending"}</td><td>{t.blocked?"Blocked":"Active"}</td><td><div className="directory-actions"><Button size="sm" variant="outline" onClick={()=>setModal({type:"adminInstitution",institution:t})}>View</Button>
+  if(page === "Institutions") { const rows=data.tenants.filter((t:Item)=>(!institutionType||employerType(t.type)===institutionType)&&[t.name,t.id,t.contactPerson,t.mobile,t.officialEmail].join(" ").toLowerCase().includes(institutionQuery.trim().toLowerCase())&&(!institutionStatus||(institutionStatus==="verified"?t.verified&&!t.blocked:institutionStatus==="pending"?!t.verified&&!t.blocked:t.blocked))); return <><div className="admin-candidate-filters institution-type-filters owner-institution-filters"><label>Name / institution ID<input value={institutionQuery} placeholder="Search institutions" onChange={e=>setInstitutionQuery(e.target.value)}/></label><label>Employer type<select value={institutionType} onChange={e=>setInstitutionType(e.target.value)}><option value="">All employer types</option>{employerTypes.map(v=><option key={v}>{v}</option>)}</select></label><label>Status<select value={institutionStatus} onChange={e=>setInstitutionStatus(e.target.value)}><option value="">All institutions</option><option value="verified">Verified</option><option value="pending">Awaiting verification</option><option value="blocked">Blocked</option></select></label><Button size="sm" variant="outline" onClick={()=>{setInstitutionQuery("");setInstitutionStatus("");setInstitutionType("")}}>Reset</Button></div><div className="admin-directory-panel"><div className="directory-count">{rows.length} institutions</div><div className="directory-scroll"><table className="admin-directory-table"><thead><tr>{["Institution","Type","Contact person","Mobile","Verification","Account","Action"].map(v=><th key={v} scope="col">{v}</th>)}</tr></thead><tbody>{rows.slice((tablePage-1)*tableSize,tablePage*tableSize).map((t:Item)=><tr key={t.id}><td><strong>{t.name}</strong></td><td>{employerType(t.type)}</td><td>{t.contactPerson||"Not added"}</td><td>{t.mobile||"Not added"}</td><td>{t.verified?"Verified":"Pending"}</td><td>{t.blocked?"Blocked":"Active"}</td><td><div className="directory-actions"><Button size="sm" variant="outline" onClick={()=>setModal({type:"adminInstitution",institution:t})}>View</Button>
               <Button
                 disabled={busy}
                 size="sm"
@@ -1319,13 +1291,14 @@ function Admin({ page, data, busy, superAdmin, action, setModal }: any) {
   return <AuditLog api={api}/>;
 }
 
-function Modal({ modal, busy, action, setModal, form, pricing }: any) {
+function Modal({ modal, busy, action, setModal, form, pricing,onBuyCredits }: any) {
+  const [confirmApplicationConsent,setConfirmApplicationConsent]=useState(false);
   const [report, setReport] = useState<Item | null>(null);
   useEffect(() => {
     if (modal.type === "reports") api("institution/reports").then(setReport);
   }, [modal.type]);
   const m = modal;
-  if(m.type==="adminCandidate") { const c=m.candidate; return <><h2>{c.displayId} · {c.user.name}</h2><dl className="candidate-detail-grid">{[["Email",c.user.email],["Mobile",c.mobile||"Not provided"],["Profile",c.profileReviewed?"Approved":"Awaiting approval"],["Account",c.user.active?"Active":"Blocked"],["Subject",c.subject],["Highest qualification",c.qualification],["Place",c.location],["Experience",c.experience+" years"],["Expected salary",rupees(c.salary*100)],["Directory visibility",c.directoryVisible?"Visible":"Private"],["Directory consent",c.directoryConsent?"Allowed":"Not allowed"],["Availability",c.availability],["Notice period",c.noticeDays+" days"]].map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value||"—"}</dd></div>)}</dl>{[ ["Pharmacy details",c.pharmacyDetails], ["Personal details",{...c.personalDetails,...(c.personalDetails?.aadhaar?{aadhaar:"•••• •••• "+c.personalDetails.aadhaar.slice(-4)}:{})}], ["Qualifications",c.education], ["Experience history",c.experienceEntries], ["Preferences",{skills:c.skills,subjects:c.subjects,preferredLocations:c.preferredLocations}] ].map(([label,value]:any)=><section className="admin-detail-section" key={label}><h3>{label}</h3>{Array.isArray(value)?value.map((entry:any,i:number)=><dl key={i} className="admin-entry-details">{Object.entries(entry).map(([k,v])=><div key={k}><dt>{k.replace(/([A-Z])/g," $1")}</dt><dd>{typeof v==="object"?JSON.stringify(v):String(v??"—")}</dd></div>)}</dl>):value&&typeof value==="object"?<dl className="admin-entry-details">{Object.entries(value).map(([k,v])=><div key={k}><dt>{k.replace(/([A-Z])/g," $1")}</dt><dd>{Array.isArray(v)?v.join(", "):String(v??"—")}</dd></div>)}</dl>:<p>Not provided</p>}</section>)}<div className="card-actions">
+  if(m.type==="adminCandidate") { const c=m.candidate; return <><h2>{c.displayId} · {c.user.name}</h2><dl className="candidate-detail-grid">{[["Email",c.user.email],["Mobile",c.mobile||"Not provided"],["Profile",c.profileReviewed?"Approved":"Awaiting approval"],["Account",c.user.active?"Active":"Blocked"],["Subject",c.subject],["Highest qualification",c.qualification],["Place",c.location],["Experience",c.experience+" years"],["Expected salary",rupees(c.salary*100)],["Directory visibility",c.directoryVisible?"Visible":"Private"],["Directory consent",c.directoryConsent?"Allowed":"Not allowed"],["Availability",c.availability],["Notice period",c.noticeDays+" days"]].map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value||"—"}</dd></div>)}</dl>{[ ["Nursing details",c.nursingDetails], ["Pharmacy details",c.pharmacyDetails], ["Personal details",{...c.personalDetails,...(c.personalDetails?.aadhaar?{aadhaar:"•••• •••• "+c.personalDetails.aadhaar.slice(-4)}:{})}], ["Qualifications",c.education], ["Experience history",c.experienceEntries], ["Preferences",{skills:c.skills,subjects:c.subjects,preferredLocations:c.preferredLocations}] ].map(([label,value]:any)=><section className="admin-detail-section" key={label}><h3>{label}</h3>{Array.isArray(value)?value.map((entry:any,i:number)=><dl key={i} className="admin-entry-details">{Object.entries(entry).map(([k,v])=><div key={k}><dt>{k.replace(/([A-Z])/g," $1")}</dt><dd>{typeof v==="object"?JSON.stringify(v):String(v??"—")}</dd></div>)}</dl>):value&&typeof value==="object"?<dl className="admin-entry-details">{Object.entries(value).map(([k,v])=><div key={k}><dt>{k.replace(/([A-Z])/g," $1")}</dt><dd>{Array.isArray(v)?v.join(", "):String(v??"—")}</dd></div>)}</dl>:<p>Not provided</p>}</section>)}<div className="card-actions">
               <Button
                 size="sm"
                 disabled={busy || c.profileReviewed}
@@ -1405,35 +1378,7 @@ function Modal({ modal, busy, action, setModal, form, pricing }: any) {
                   )}
 </>; }
   if(m.type==="candidateView")return <CandidateView applicationId={m.applicationId} candidate={m.candidate} api={api} busy={busy} action={action} setModal={setModal} pricing={pricing}/>;
-  if (m.type === "unlock")
-    return (
-      <>
-        <h2>Unlock contact</h2>
-        <p>
-          {m.candidate.displayId} ·{" "}
-          {pricing?.unlockPaid === false
-            ? "New unlocks are free."
-            : "First unlock costs 1 credit."}{" "}
-          An existing institution unlock costs 0. Current candidate consent is
-          always checked.
-        </p>
-        <Button
-          disabled={busy}
-          onClick={() =>
-            action(async () => {
-              const contact = await api(
-                "institution/candidates/" + m.candidate.id + "/unlock",
-                "POST",
-                {},
-              );
-              return contact;
-            }, "Contact access checked")
-          }
-        >
-          Confirm unlock
-        </Button>
-      </>
-    );
+  if (m.type === "unlock")return <UnlockContact candidate={m.candidate} api={api} action={action} onBuy={onBuyCredits} onCancel={()=>setModal(null)}/>;
   if (m.type === "contact")
     return (
       <>
@@ -1528,26 +1473,21 @@ function Modal({ modal, busy, action, setModal, form, pricing }: any) {
                 </article><Button type="button" variant="outline" onClick={()=>setModal({type:"candidateView",candidate:p.candidate,applicationId:p.applicationId})}>View candidate profile</Button></>;}
   if (m.type === "apply")
     return (
-      <form
+      <>{confirmApplicationConsent&&<div className="modal-backdrop feedback-backdrop"><section className="card modal" role="alertdialog" aria-modal="true" aria-labelledby="application-consent-title"><h2 id="application-consent-title">Contact permission for this application</h2><p>Allow this employer to unlock your phone number and email for this application?</p><p className="muted">Your details remain hidden until an authorized unlock. Your separate profile privacy settings may also allow contact access.</p><div className="card-actions"><Button type="button" disabled={busy} onClick={()=>{setConfirmApplicationConsent(false);action(()=>api("jobs/"+m.job.id+"/apply","POST",{contactConsent:true}),"Application submitted")}}>Allow &amp; apply</Button><Button type="button" variant="outline" disabled={busy} onClick={()=>{setConfirmApplicationConsent(false);action(()=>api("jobs/"+m.job.id+"/apply","POST",{contactConsent:false}),"Application submitted")}}>Apply without contact access</Button><Button type="button" variant="ghost" disabled={busy} onClick={()=>setConfirmApplicationConsent(false)}>Cancel</Button></div></section></div>}<form
         onSubmit={(e: any) => {
           const v = form(e);
-          action(
-            () =>
-              api("jobs/" + m.job.id + "/apply", "POST", {
-                contactConsent: v.consent === "on",
-              }),
-            "Application submitted",
-          );
+          if(v.consent!=="on"){setConfirmApplicationConsent(true);return;}
+          action(()=>api("jobs/"+m.job.id+"/apply","POST",{contactConsent:true}),"Application submitted");
         }}
       >
         <h2>{m.job.title}</h2>
         <p>{m.job.institution||"Institution"} · {m.job.location}</p>
-        <div className="job-detail-summary"><span>{m.job.subject}</span><span>₹{m.job.salary.toLocaleString("en-IN")}/month</span><span>Closes {new Date(m.job.closesAt).toLocaleDateString("en-IN")}</span></div>
+        <div className="job-detail-summary"><span>{m.job.subject}</span><span>{jobSalary(m.job)}/month</span><span>Closes {new Date(m.job.closesAt).toLocaleDateString("en-IN")}</span></div>
         <h3>Description & requirements</h3><p className="job-description-text">{m.job.description||"The employer has not added a description."}</p>
 
         <label className="check-label">
           <input name="consent" type="checkbox" defaultChecked={false} />
-          Allow this employer to unlock my contact details
+          Allow this employer to unlock my phone number and email to contact me about this application.
         </label>
         <p className="muted">Your contact details stay hidden until an authorized unlock.</p>
         <p className="muted">
@@ -1557,32 +1497,38 @@ function Modal({ modal, busy, action, setModal, form, pricing }: any) {
               ". Purchase this job’s fee under Payments, then return here after approval."
             : "Applying is free."}
         </p>
-        <Button disabled={busy}>Submit application</Button>
-      </form>
+        {m.job.eligibility?.eligible===false&&<p className="alert warning">{m.job.eligibility.reason}</p>}
+        <GeneralJobSummary job={m.job} api={api}/>
+        <Button disabled={busy||m.job.eligibility?.eligible===false}>Submit application</Button>
+      </form></>
     );
-  if (m.type === "jobDetails") return <><h2>{m.job.title}</h2><div className="job-detail-summary"><span>{m.job.subject}</span><span>{m.job.location}</span><span>₹{m.job.salary.toLocaleString("en-IN")}/month</span><span>{m.job.status}</span><span>Closes {new Date(m.job.closesAt).toLocaleDateString("en-IN")}</span></div><h3>Job description</h3><p className="job-description-text">{m.job.description}</p></>;
+  if (m.type === "jobDetails") return <><h2>{m.job.title}</h2><div className="job-detail-summary"><span>{m.job.subject}</span><span>{m.job.location}</span><span>{jobSalary(m.job)}/month</span><span>{m.job.status}</span><span>Closes {new Date(m.job.closesAt).toLocaleDateString("en-IN")}</span></div><h3>Job description</h3><p className="job-description-text">{m.job.description}</p><GeneralJobSummary job={m.job} api={api}/></>;
   if (m.type === "job")
     return (
       <form
         onSubmit={(e: any) => {
-          const v = form(e);
+          const formData=new FormData(e.currentTarget);const v:any=form(e);const general=(v.profession||m.job?.profession)==="GENERAL";
+          if(general){v.requirements={anyGraduate:formData.get("anyGraduate")==="on",acceptedDegrees:formData.getAll("acceptedDegrees"),requiredDegrees:formData.getAll("requiredDegrees"),minExperience:Number(formData.get("minExperience")||0),categoryDetails:JSON.parse(String(formData.get("categoryDetails")||"{}"))};}
+          for(const k of ["anyGraduate","acceptedDegrees","requiredDegrees","minExperience","categoryDetails"])delete v[k];
           action(
             () =>
-              api("institution/jobs", "POST", {
+              api(m.job?"institution/jobs/"+m.job.id:"institution/jobs", m.job?"PATCH":"POST", {
                 ...v,
+                salaryMax:Number(v.salaryMax),
                 salary: Number(v.salary),
                 closesAt: new Date(String(v.closesAt)).toISOString(),
               }),
-            "Job posted",
+            m.job?"Job updated":"Job posted",
           );
         }}
       >
-        <div className="job-compose-fields"><JobProfessionField api={api}/>
+        <div className="job-compose-fields"><GeneralJobFields api={api} job={m.job}/>{m.job?<label>Profession<input disabled value={m.job.profession==="GENERAL"?"General Jobs":m.job.profession==="NURSE"?"Nurse":m.job.profession==="PHARMACIST"?"Pharmacist":"Teacher"}/></label>:<JobProfessionField api={api}/>}
         {[
           ["title", "Job title"],
           ["subject", "Subject"],
           ["location", "Location"],
-          ["salary", "Salary / month"],
+          ["salary", "Minimum salary / month"],
+          ["salaryMax", "Maximum salary / month"],
           ["closesAt", "Closing date"],
         ].map(([name, label]) => (
           <label key={name}>
@@ -1590,29 +1536,24 @@ function Modal({ modal, busy, action, setModal, form, pricing }: any) {
             <input
               required
               name={name}
+              defaultValue={m.job?(name==="closesAt"?new Date(new Date(m.job.closesAt).getTime()-new Date(m.job.closesAt).getTimezoneOffset()*60000).toISOString().slice(0,16):name==="salaryMax"?m.job.salaryMax??m.job.salary:m.job[name]):undefined}
               type={
-                name === "salary"
+                ["salary","salaryMax"].includes(name)
                   ? "number"
                   : name === "closesAt"
                     ? "datetime-local"
                     : "text"
               }
-              min={name === "salary" ? "0" : undefined}
+              min={["salary","salaryMax"].includes(name) ? "0" : undefined}
             />
           </label>
         ))}
         <label className="job-description-field">
           Description
-          <textarea name="description" required minLength={20} rows={3} />
+          <textarea name="description" defaultValue={m.job?.description||""} required minLength={20} maxLength={5000} rows={3} />
         </label></div>
-        <p className="muted">
-          {pricing?.jobFee
-            ? "Posting fee: " +
-              rupees(pricing.jobFee) +
-              ". Purchase a posting fee under Account, then return here after approval."
-            : "Job posting is free."}
-        </p>
-        <Button disabled={busy}>Publish job</Button>
+        <JobFeeInfo api={api} job={m.job} pricing={pricing}/>
+        <Button disabled={busy}>{m.job?"Save changes":"Publish job"}</Button>
       </form>
     );
   if (m.type === "plans")
@@ -1911,12 +1852,12 @@ function Modal({ modal, busy, action, setModal, form, pricing }: any) {
         onSubmit={(e: any) => {
           const v = form(e);
           action(
-            () => api("institution/profile", "PATCH", {...v,recruitingProfessions:JSON.parse(String(v.recruitingProfessions))}),
+            () => api("institution/profile", "PATCH", {...v,...(v.generalCategories?{generalCategories:JSON.parse(String(v.generalCategories))}:{}),recruitingProfessions:JSON.parse(String(v.recruitingProfessions))}),
             "Institution updated",
           );
         }}
       >
-        <h2>Employer profile</h2><ProfessionFields initial={m.value.tenant.recruitingProfessions||["TEACHER"]}/>
+        <h2>Employer profile</h2><ProfessionFields api={api} initialCategories={m.value.tenant.generalCategories||[]} initial={m.value.tenant.recruitingProfessions||["TEACHER"]}/>
         <p>Changing the institution name requires verification again.</p>
         <label>
           Name
@@ -1925,7 +1866,7 @@ function Modal({ modal, busy, action, setModal, form, pricing }: any) {
         <label>
           Type
           <select name="type" defaultValue={m.value.profile.type}>
-            {["School", "College", "University", "Coaching", "Medical shop", "Hospital", "Other"].map(
+            {["School", "College", "University", "Coaching", "Medical shop", "Hospital", "Medical college", "Clinic", "Bank", "Showroom", "Company", "Other"].map(
               (n) => (
                 <option key={n}>{n}</option>
               ),

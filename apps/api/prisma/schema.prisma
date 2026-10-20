@@ -33,6 +33,22 @@ model VerificationChallenge {
  used Boolean @default(false)
  @@index([userId, channel, expiresAt])
 }
+model PasswordResetChallenge {
+ id String @id
+ userId String?
+ emailKey String
+ ipKey String
+ codeHash String
+ passwordVersion String
+ expiresAt DateTime
+ attempts Int @default(0)
+ used Boolean @default(false)
+ createdAt DateTime @default(now())
+ @@index([emailKey, createdAt])
+ @@index([ipKey, createdAt])
+ @@index([userId, used])
+ @@index([expiresAt])
+}
 model Session {
  id String @id
  csrf String
@@ -42,6 +58,7 @@ model Session {
  @@index([expiresAt])
 }
 model Tenant {
+ generalCategories String[] @default([])
  recruitingProfessions String[] @default(["TEACHER"])
  id String @id @default(cuid())
  name String
@@ -51,8 +68,12 @@ model Tenant {
 }
 // Search/partial indexes are maintained in 20261010183000_query_indexes SQL.
 model Candidate {
+ generalDetails Json @default("{}")
+ jobInterests String[] @default([])
+ @@index([jobInterests], type: Gin)
  profession String @default("TEACHER")
  pharmacyDetails Json @default("{}")
+ nursingDetails Json @default("{}")
  currentPlaceId String?
  preferredPlaceIds String[] @default([])
  @@index([profession, active, profileReviewed])
@@ -111,6 +132,8 @@ model Subscription {
  @@index([endsAt])
 }
 model CreditGrant {
+ profession String @default("TEACHER")
+ @@index([tenantId, profession, expiresAt])
  id String @id @default(cuid())
  tenantId String
  subscriptionId String
@@ -121,6 +144,7 @@ model CreditGrant {
  @@index([expiresAt])
 }
 model CreditTransaction {
+ profession String @default("TEACHER")
  id String @id @default(cuid())
  tenantId String
  grantId String
@@ -141,6 +165,10 @@ model Unlock {
  @@unique([tenantId, candidateId])
 }
 model Job {
+ category String?
+ requirements Json @default("{}")
+ @@index([profession, category, status])
+ salaryMax Int?
  profession String @default("TEACHER")
  @@index([profession, status, closesAt])
  id String @id @default(cuid())
